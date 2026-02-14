@@ -8,7 +8,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +23,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { getThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme";
 
 interface Host {
   id: string;
@@ -48,6 +56,7 @@ function App() {
   const [connectingStage, setConnectingStage] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [editingHost, setEditingHost] = useState<Host | null>(null);
   const [formData, setFormData] = useState<Partial<Host>>({});
   const [isInTauri] = useState(() => {
@@ -60,10 +69,63 @@ function App() {
   const sessionBuffers = useRef(new Map<string, string>());
   const activeSessionIdRef = useRef<string | null>(null);
   const resizeDebounceTimer = useRef<number | null>(null);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
+  const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("xtermius_sidebar_open") !== "0");
+
+  function resolvedTheme(): "light" | "dark" {
+    const d = document.documentElement.dataset.theme;
+    if (d === "light" || d === "dark") return d;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  function applyTerminalTheme() {
+    const term = terminalInstance.current;
+    if (!term) return;
+    // Keep the terminal itself dark for readability (UI may be light/dark).
+    // This avoids "black background + dark foreground" cases in light mode.
+    term.options.theme = {
+      background: "#0b0f16",
+      foreground: "#e5e7eb",
+      cursor: "#e5e7eb",
+      selectionBackground: "rgba(148, 163, 184, 0.35)",
+    };
+  }
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    // Keep persisted theme in sync with UI state.
+    setThemeMode(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    // Keep xterm colors readable across Light/Dark, including System mode changes.
+    applyTerminalTheme();
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      // theme.ts updates documentElement.dataset.theme; re-apply so xterm stays in sync.
+      if (getThemeMode() === "system") applyTerminalTheme();
+    };
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
+    else if (typeof (mq as any).addListener === "function") (mq as any).addListener(onChange);
+    return () => {
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onChange);
+      else if (typeof (mq as any).removeListener === "function") (mq as any).removeListener(onChange);
+    };
+  }, [themeMode]);
+
+  useEffect(() => {
+    localStorage.setItem("xtermius_sidebar_open", sidebarOpen ? "1" : "0");
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    // Sidebar toggle changes available terminal size; force a refit to avoid transient overflow/scrollbars.
+    requestAnimationFrame(() => fitAndResizeActivePty());
+    window.setTimeout(() => fitAndResizeActivePty(), 120);
+  }, [sidebarOpen]);
 
   function fitAndResizeActivePty() {
     const term = terminalInstance.current;
@@ -119,9 +181,10 @@ function App() {
     });
 
     const unlistenExitP = listen<{ session_id: string; code: number }>("pty:exit", (event) => {
-      const { session_id, code } = event.payload;
+      const { session_id } = event.payload;
+      // Clear UI state for the exited session. Don't append exit text to the terminal.
       if (terminalInstance.current && activeSessionIdRef.current === session_id) {
-        terminalInstance.current.write(`\r\n[Session exited: ${code}]\r\n`);
+        terminalInstance.current.clear();
       }
       sessionBuffers.current.delete(session_id);
       setSessions((prev) => prev.filter((s) => s.id !== session_id));
@@ -135,19 +198,27 @@ function App() {
   }, [isInTauri]);
 
   useEffect(() => {
+    // When there is no active session, keep the terminal view clean.
+    if (!terminalReady) return;
+    if (sessions.length !== 0) return;
+    terminalInstance.current?.clear();
+  }, [sessions.length, terminalReady]);
+
+  useEffect(() => {
     if (terminalRef.current && !terminalInstance.current) {
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 14,
-        fontFamily: "Menlo, Monaco, 'Courier New', monospace",
-        theme: { background: "#1e1e1e" },
+        fontFamily: "SF Mono, Menlo, Monaco, 'Courier New', monospace",
+        theme: { background: "transparent", foreground: "#e5e7eb" },
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(terminalRef.current);
       fit.fit();
-      term.focus();
       terminalInstance.current = term;
+      applyTerminalTheme();
+      term.focus();
       fitAddon.current = fit;
       setTerminalReady(true);
 
@@ -354,93 +425,206 @@ function App() {
   const activeHosts = hosts.filter(h => !h.deleted);
 
   return (
-      <div className="flex h-screen">
-      <div className="w-64 border-r bg-slate-50 flex flex-col">
-        <div className="p-4 border-b flex items-center justify-between gap-2">
-          <h2 className="font-semibold">Hosts</h2>
-          <Button size="sm" onClick={openAddDialog}>Add</Button>
-        </div>
-        <div className="flex-1 overflow-auto p-2">
-          {activeHosts.length > 0 ? (
-            activeHosts.map((host) => (
-              <div
-                key={host.id}
-                className="p-3 rounded-md cursor-pointer hover:bg-slate-100 mb-1 group"
-                onClick={() => connectToHost(host)}
+    <div className="h-screen text-foreground overflow-hidden" style={{ background: "var(--app-bg)" } as any}>
+      {/* Unified macOS titlebar + content area (sidebar left, shell right). */}
+      <div className={["grid h-full min-h-0 min-w-0", sidebarOpen ? "grid-cols-[288px_1fr]" : "grid-cols-1"].join(" ")}>
+        {sidebarOpen ? (
+          <div className="min-w-0 flex flex-col" style={{ background: "var(--app-sidebar-bg)" } as any}>
+            <div
+              data-tauri-drag-region
+              className="h-12 flex items-center gap-2 pl-[88px] pr-2"
+              style={{ WebkitAppRegion: "drag" } as any}
+            >
+              <button
+                type="button"
+                title="Hide Hosts"
+                aria-label="Hide Hosts"
+                onClick={() => setSidebarOpen(false)}
+                className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                data-tauri-drag-region="false"
+                style={{ WebkitAppRegion: "no-drag" } as any}
               >
-                <div className="font-medium">{host.hostname || "Unnamed"}</div>
-                <div className="text-sm text-slate-500">{host.user}@{host.hostname}</div>
-                {connectingHostId === host.id ? (
-                  <div className="text-xs text-slate-400 mt-1">
-                    Connecting{connectingStage ? ` (${connectingStage})` : ""}...
+                <PanelLeftClose size={18} />
+              </button>
+              <div className="flex-1" />
+            </div>
+
+            <aside className="flex-1 min-h-0 overflow-hidden">
+              <div className="h-full overflow-auto px-2 py-2">
+                {activeHosts.length > 0 ? (
+                  activeHosts.map((host) => (
+                    <div
+                      key={host.id}
+                      className="px-3 py-2 rounded-lg cursor-pointer hover:bg-muted mb-1 group flex items-start gap-2"
+                      onClick={() => connectToHost(host)}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-semibold truncate">
+                          {host.alias || host.hostname || "Unnamed"}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground truncate">
+                          {host.user ? `${host.user}@` : ""}{host.hostname}{host.port && host.port !== 22 ? `:${host.port}` : ""}
+                        </div>
+                        {connectingHostId === host.id ? (
+                          <div className="text-[11px] text-muted-foreground mt-1">
+                            Connecting{connectingStage ? ` (${connectingStage})` : ""}...
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                          onClick={(e) => { e.stopPropagation(); openEditDialog(host); }}
+                          title="Edit"
+                          aria-label="Edit host"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                          onClick={(e) => { e.stopPropagation(); deleteHost(host); }}
+                          title="Delete"
+                          aria-label="Delete host"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                    <p className="text-sm text-muted-foreground mb-3">No hosts yet</p>
+                    <Button onClick={openAddDialog}>Create Host</Button>
+                  </div>
+                )}
+                {!isInTauri ? (
+                  <div className="mt-2 px-3 text-[11px] text-muted-foreground">
+                    Web Mode: PTY/SSH requires the desktop app.
                   </div>
                 ) : null}
-                <div className="flex gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); openEditDialog(host); }}>
-                    Edit
-                  </Button>
-                  <Button variant="destructive" size="sm" onClick={(e) => { e.stopPropagation(); deleteHost(host); }}>
-                    Del
-                  </Button>
-                </div>
               </div>
-            ))
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <p className="text-slate-500 mb-4">No hosts yet</p>
-              <Button onClick={openAddDialog}>Create Host</Button>
-            </div>
-          )}
-        </div>
-        {!isInTauri && (
-          <div className="p-3 text-xs text-slate-500 text-center border-t">
-            Web Mode - SSH requires desktop app
+            </aside>
           </div>
-        )}
-      </div>
-      
-      <div className="flex-1 flex flex-col min-h-0">
-        {sessions.length > 0 ? (
-          <Tabs value={activeSessionId || ""} onValueChange={setActiveSessionId} className="shrink-0">
-            <TabsList className="justify-start rounded-none h-9 bg-slate-100 border-b w-full">
-              {sessions.map((session) => (
-                <TabsTrigger key={session.id} value={session.id} asChild>
-                  <div className="inline-flex items-center gap-2 px-3">
-                    <span>{session.hostAlias}</span>
-                    <button
-                      type="button"
-                      className="h-4 w-4 p-0 leading-4 text-slate-600 hover:text-slate-900"
-                      onClick={(e) => { e.stopPropagation(); closeSession(session.id); }}
-                      aria-label="Close tab"
-                      title="Close"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        ) : (
-          <div className="h-9 bg-slate-100 border-b flex items-center px-3 text-sm text-slate-500">
-            No active session
-          </div>
-        )}
+        ) : null}
 
-        <div className="flex-1 bg-slate-900 p-2 min-h-0 relative">
+        <div className="min-w-0 flex flex-col" style={{ background: "var(--app-bg)" } as any}>
           <div
-            ref={terminalRef}
-            className="h-full w-full"
-            onMouseDown={() => terminalInstance.current?.focus()}
-          />
-          {sessions.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-center text-slate-400">
-                <p className="text-lg mb-2">Select a host to connect</p>
-                <p className="text-sm">Or click a host from the sidebar</p>
-              </div>
+            data-tauri-drag-region
+            className={[
+              "h-12 flex items-center gap-2 pr-3 select-none",
+              sidebarOpen ? "pl-3" : "pl-[88px]",
+            ].join(" ")}
+            style={{ WebkitAppRegion: "drag" } as any}
+          >
+            {!sidebarOpen ? (
+              <button
+                type="button"
+                title="Show Hosts"
+                aria-label="Show Hosts"
+                onClick={() => setSidebarOpen(true)}
+                className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                data-tauri-drag-region="false"
+                style={{ WebkitAppRegion: "no-drag" } as any}
+              >
+                <PanelLeftOpen size={18} />
+              </button>
+            ) : null}
+
+            {/* Session list in titlebar (left-aligned) */}
+            <div className="min-w-0 flex items-center gap-2 flex-1">
+              {sessions.length > 0 ? (
+                <div className="flex items-center gap-1 overflow-x-auto py-1 max-w-[min(720px,60vw)]">
+                  {sessions.map((session) => {
+                    const active = session.id === activeSessionId;
+                    return (
+                      <div
+                        key={session.id}
+                        className={[
+                          "group shrink-0 inline-flex items-center gap-2 h-8 px-2 rounded-lg cursor-pointer",
+                          active ? "bg-[var(--app-chip-active)] text-foreground" : "bg-[var(--app-chip)] hover:bg-[var(--app-chip-hover)] text-foreground",
+                        ].join(" ")}
+                        onClick={() => setActiveSessionId(session.id)}
+                        title={session.hostAlias}
+                        aria-label={`Switch to ${session.hostAlias}`}
+                        data-tauri-drag-region="false"
+                        style={{ WebkitAppRegion: "no-drag" } as any}
+                      >
+                        <span className="text-sm font-semibold max-w-[220px] truncate">
+                          {session.hostAlias}
+                        </span>
+                        <button
+                          type="button"
+                          className="h-7 w-7 rounded-md leading-4 text-muted-foreground hover:text-foreground hover:bg-background/60"
+                          onClick={(e) => { e.stopPropagation(); closeSession(session.id); }}
+                          aria-label="Close session"
+                          title="Close"
+                          data-tauri-drag-region="false"
+                          style={{ WebkitAppRegion: "no-drag" } as any}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="h-8 flex items-center px-2 text-sm font-semibold text-muted-foreground/80">
+                  xTermius
+                </div>
+              )}
+
+              {/* Drag-friendly spacer */}
+              <div className="flex-1" />
             </div>
-          ) : null}
+
+            <div
+              className="ml-auto flex items-center gap-1"
+              data-tauri-drag-region="false"
+              style={{ WebkitAppRegion: "no-drag" } as any}
+            >
+              <button
+                type="button"
+                className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                onClick={() => setShowSettings(true)}
+                title="Settings"
+                aria-label="Settings"
+              >
+                <Settings2 size={18} />
+              </button>
+              <button
+                type="button"
+                className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+                onClick={openAddDialog}
+                title="Add Host"
+                aria-label="Add Host"
+              >
+                <Plus size={18} />
+              </button>
+            </div>
+          </div>
+
+          <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+            <div className="flex-1 min-h-0 p-3 relative overflow-hidden">
+              <div
+                className="h-full w-full rounded-xl bg-[var(--app-term-panel)] p-3 overflow-hidden"
+                onMouseDown={() => terminalInstance.current?.focus()}
+              >
+                <div ref={terminalRef} className="h-full w-full" />
+              </div>
+              {sessions.length === 0 ? (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="text-center text-slate-300">
+                    <p className="text-lg mb-2">Select a host to connect</p>
+                    <p className="text-sm opacity-80">
+                      {sidebarOpen ? "Or click a host from the sidebar" : "Show Hosts from the toolbar"}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </main>
         </div>
       </div>
 
@@ -547,6 +731,40 @@ function App() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancel</Button>
             <Button onClick={handleSave}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSettings} onOpenChange={setShowSettings}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="grid gap-2">
+              <div className="text-sm font-medium">Appearance</div>
+              <div className="flex rounded-lg border border-border bg-card p-1">
+                {(["system", "light", "dark"] as ThemeMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={[
+                      "flex-1 h-8 rounded-md text-sm",
+                      themeMode === m ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                    ].join(" ")}
+                    onClick={() => setThemeModeState(m)}
+                  >
+                    {m === "system" ? "System" : m === "light" ? "Light" : "Dark"}
+                  </button>
+                ))}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Choose Light/Dark or follow system appearance.
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSettings(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
