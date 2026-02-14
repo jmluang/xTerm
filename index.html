@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>xTermius</title>
+      <style>
+        html, body { height: 100%; }
+        body { margin: 0; background: #0b1220; color: #e2e8f0; }
+        #root {
+          height: 100%;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        .boot {
+          padding: 16px;
+          opacity: 0.9;
+        }
+        .boot small { opacity: 0.75; display: block; margin-top: 8px; }
+      </style>
+      <script>
+        // Early boot diagnostics for "blank window" cases (before React mounts).
+        window.addEventListener('error', function (e) {
+          var el = document.getElementById('root');
+          if (!el) return;
+          var msg = (e && (e.message || (e.error && e.error.message))) || 'Unknown error';
+          el.innerHTML =
+            '<div class="boot" style="color:#fecaca">Boot error: ' +
+            String(msg) +
+            '<small>Open DevTools Console for details.</small></div>';
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var el = document.getElementById('root');
+          if (!el) return;
+          var reason = e && e.reason;
+          var msg = (reason && reason.message) ? reason.message : String(reason);
+          el.innerHTML =
+            '<div class="boot" style="color:#fecaca">Boot rejection: ' +
+            String(msg) +
+            '<small>Open DevTools Console for details.</small></div>';
+        });
+      </script>
+    </head>
+    <body>
+      <div id="root">
+        <div class="boot">
+          Loading frontend...
+          <small>If this stays forever, the WebView did not load Vite or JS crashed early.</small>
+        </div>
+      </div>
+      <script type="module">
+        const root = document.getElementById("root");
+        const setStatus = (msg) => {
+          if (!root) return;
+          const el = root.querySelector(".boot");
+          if (el) el.firstChild.textContent = msg;
+        };
+
+        const start = async () => {
+          // In Tauri dev, the WebView occasionally hits transient timeouts while Vite is coming up.
+          // Retry the entry import to avoid "blank window" during startup.
+          const maxAttempts = import.meta.env.DEV ? 40 : 1;
+          let attempt = 0;
+          // ~0.25s -> ~4s backoff
+          const delayFor = (n) => Math.min(4000, 250 * Math.pow(1.25, n));
+
+          for (;;) {
+            attempt += 1;
+            try {
+              setStatus(attempt === 1 ? "Loading frontend..." : `Loading frontend (retry ${attempt - 1})...`);
+              await import("/src/main.tsx");
+              return;
+            } catch (e) {
+              if (attempt >= maxAttempts) throw e;
+              await new Promise((r) => setTimeout(r, delayFor(attempt)));
+            }
+          }
+        };
+
+        start();
+      </script>
+    </body>
+  </html>

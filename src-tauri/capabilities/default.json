@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "dialog:default",
+    "dialog:allow-open",
+    "pty:default",
+    "pty:allow-spawn",
+    "pty:allow-write",
+    "pty:allow-resize",
+    "pty:allow-kill"
+  ]
+}
