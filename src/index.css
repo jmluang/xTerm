@@ -44,6 +44,53 @@
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+:root {
+  /* App chrome variables (used by App.tsx). Defaults serve Light mode. */
+  --app-bg: radial-gradient(1200px 700px at 70% -220px, rgba(56, 189, 248, 0.18), transparent 55%),
+    radial-gradient(900px 520px at 30% -260px, rgba(99, 102, 241, 0.10), transparent 55%),
+    #f5f6f8;
+  --app-sidebar-bg: radial-gradient(900px 520px at -240px -120px, rgba(255, 59, 88, 0.18), transparent 60%),
+    radial-gradient(700px 420px at 40% -220px, rgba(255, 0, 90, 0.10), transparent 60%),
+    #f2f3f6;
+
+  --app-chip: rgba(10, 13, 18, 0.06);
+  --app-chip-hover: rgba(10, 13, 18, 0.10);
+  --app-chip-active: rgba(10, 13, 18, 0.14);
+  --app-term-panel: rgba(10, 13, 18, 0.04);
+}
+
+:root[data-theme="dark"] {
+  --color-background: oklch(16% 0.02 255);
+  --color-foreground: oklch(96% 0.01 255);
+  --color-card: oklch(20% 0.02 255);
+  --color-card-foreground: oklch(96% 0.01 255);
+  --color-popover: oklch(22% 0.02 255);
+  --color-popover-foreground: oklch(96% 0.01 255);
+  --color-primary: oklch(88% 0.01 255);
+  --color-primary-foreground: oklch(20% 0.02 255);
+  --color-secondary: oklch(24% 0.02 255);
+  --color-secondary-foreground: oklch(96% 0.01 255);
+  --color-muted: oklch(22% 0.02 255);
+  --color-muted-foreground: oklch(74% 0.02 255);
+  --color-accent: oklch(24% 0.02 255);
+  --color-accent-foreground: oklch(96% 0.01 255);
+  --color-border: oklch(30% 0.02 255);
+  --color-input: oklch(30% 0.02 255);
+  --color-ring: oklch(72% 0.03 255);
+
+  --app-bg: #0a0d12;
+  --app-sidebar-bg: radial-gradient(900px 520px at -240px -120px, rgba(255, 59, 88, 0.18), transparent 60%),
+    radial-gradient(700px 420px at 40% -220px, rgba(255, 0, 90, 0.08), transparent 60%),
+    #0b0f16;
+
+  --app-chip: rgba(255, 255, 255, 0.05);
+  --app-chip-hover: rgba(255, 255, 255, 0.10);
+  --app-chip-active: rgba(255, 255, 255, 0.12);
+  --app-term-panel: rgba(0, 0, 0, 0.20);
 }
 
 ::-webkit-scrollbar {
@@ -62,4 +109,12 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
 }
