@@ -81,14 +81,28 @@ function App() {
   function applyTerminalTheme() {
     const term = terminalInstance.current;
     if (!term) return;
-    // Keep the terminal itself dark for readability (UI may be light/dark).
-    // This avoids "black background + dark foreground" cases in light mode.
-    term.options.theme = {
-      background: "#0b0f16",
-      foreground: "#e5e7eb",
-      cursor: "#e5e7eb",
-      selectionBackground: "rgba(148, 163, 184, 0.35)",
-    };
+    const t = resolvedTheme();
+    const cssBg = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
+    const bg = cssBg || (t === "dark" ? "#0b0f16" : "#ffffff");
+    term.options.theme =
+      t === "dark"
+        ? {
+            background: bg,
+            foreground: "#e5e7eb",
+            cursor: "#e5e7eb",
+            selectionBackground: "rgba(148, 163, 184, 0.35)",
+          }
+        : {
+            background: bg,
+            foreground: "#0b1220", // near-black
+            cursor: "#0b1220",
+            selectionBackground: "rgba(2, 132, 199, 0.22)",
+          };
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      // Ignore; refresh isn't critical and may fail during early init.
+    }
   }
 
   useEffect(() => {
@@ -608,7 +622,8 @@ function App() {
           <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
             <div className="flex-1 min-h-0 p-3 relative overflow-hidden">
               <div
-                className="h-full w-full rounded-xl bg-[var(--app-term-panel)] p-3 overflow-hidden"
+                className="h-full w-full rounded-xl p-3 overflow-hidden"
+                style={{ background: "var(--app-term-bg)" } as any}
                 onMouseDown={() => terminalInstance.current?.focus()}
               >
                 <div ref={terminalRef} className="h-full w-full" />
