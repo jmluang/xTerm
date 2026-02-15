@@ -44,8 +44,28 @@
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
+  margin: 0;
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
     "Helvetica Neue", Arial, sans-serif;
+  /* Prevent accidental text selection while dragging the window/titlebar. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection where it matters (terminal, inputs, editable fields). */
+input,
+textarea,
+[contenteditable="true"],
+.xterm,
+.xterm * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 :root {
@@ -60,37 +80,46 @@ body {
   --app-chip: rgba(10, 13, 18, 0.06);
   --app-chip-hover: rgba(10, 13, 18, 0.10);
   --app-chip-active: rgba(10, 13, 18, 0.14);
+  --app-chip-failed: rgba(220, 38, 38, 0.10);
+  --app-chip-failed-hover: rgba(220, 38, 38, 0.14);
+  --app-chip-failed-text: rgba(153, 27, 27, 0.95);
   --app-term-bg: #ffffff;
 }
 
 :root[data-theme="dark"] {
-  --color-background: oklch(16% 0.02 255);
-  --color-foreground: oklch(96% 0.01 255);
-  --color-card: oklch(20% 0.02 255);
-  --color-card-foreground: oklch(96% 0.01 255);
-  --color-popover: oklch(22% 0.02 255);
-  --color-popover-foreground: oklch(96% 0.01 255);
-  --color-primary: oklch(88% 0.01 255);
-  --color-primary-foreground: oklch(20% 0.02 255);
-  --color-secondary: oklch(24% 0.02 255);
-  --color-secondary-foreground: oklch(96% 0.01 255);
-  --color-muted: oklch(22% 0.02 255);
-  --color-muted-foreground: oklch(74% 0.02 255);
-  --color-accent: oklch(24% 0.02 255);
-  --color-accent-foreground: oklch(96% 0.01 255);
-  --color-border: oklch(30% 0.02 255);
-  --color-input: oklch(30% 0.02 255);
-  --color-ring: oklch(72% 0.03 255);
+  /* Neutral dark palette (avoid blue hue) */
+  --color-background: oklch(18% 0 0);
+  --color-foreground: oklch(96% 0 0);
+  --color-card: oklch(20% 0 0);
+  --color-card-foreground: oklch(96% 0 0);
+  --color-popover: oklch(22% 0 0);
+  --color-popover-foreground: oklch(96% 0 0);
+  --color-primary: oklch(88% 0 0);
+  --color-primary-foreground: oklch(20% 0 0);
+  --color-secondary: oklch(24% 0 0);
+  --color-secondary-foreground: oklch(96% 0 0);
+  --color-muted: oklch(22% 0 0);
+  --color-muted-foreground: oklch(72% 0 0);
+  --color-accent: oklch(26% 0 0);
+  --color-accent-foreground: oklch(96% 0 0);
+  --color-border: oklch(30% 0 0);
+  --color-input: oklch(30% 0 0);
+  --color-ring: oklch(72% 0 0);
 
-  --app-bg: #0a0d12;
-  --app-sidebar-bg: radial-gradient(900px 520px at -240px -120px, rgba(255, 59, 88, 0.18), transparent 60%),
-    radial-gradient(700px 420px at 40% -220px, rgba(255, 0, 90, 0.08), transparent 60%),
-    #0b0f16;
+  /* Neutral deep gray (Codex-like), avoid blue/purple cast. */
+  --app-bg: #141617;
+  --app-sidebar-bg:
+    radial-gradient(900px 520px at -240px -120px, rgba(255, 255, 255, 0.06), transparent 60%),
+    radial-gradient(700px 420px at 40% -220px, rgba(255, 255, 255, 0.04), transparent 60%),
+    rgba(20, 22, 23, 0.92);
 
   --app-chip: rgba(255, 255, 255, 0.05);
   --app-chip-hover: rgba(255, 255, 255, 0.10);
   --app-chip-active: rgba(255, 255, 255, 0.12);
-  --app-term-bg: #0b0f16;
+  --app-chip-failed: rgba(248, 113, 113, 0.16);
+  --app-chip-failed-hover: rgba(248, 113, 113, 0.22);
+  --app-chip-failed-text: rgba(254, 226, 226, 0.95);
+  --app-term-bg: #0f1112;
 }
 
 ::-webkit-scrollbar {
