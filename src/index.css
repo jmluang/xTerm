@@ -60,7 +60,7 @@ body {
   --app-chip: rgba(10, 13, 18, 0.06);
   --app-chip-hover: rgba(10, 13, 18, 0.10);
   --app-chip-active: rgba(10, 13, 18, 0.14);
-  --app-term-panel: rgba(10, 13, 18, 0.04);
+  --app-term-bg: #ffffff;
 }
 
 :root[data-theme="dark"] {
@@ -90,7 +90,7 @@ body {
   --app-chip: rgba(255, 255, 255, 0.05);
   --app-chip-hover: rgba(255, 255, 255, 0.10);
   --app-chip-active: rgba(255, 255, 255, 0.12);
-  --app-term-panel: rgba(0, 0, 0, 0.20);
+  --app-term-bg: #0b0f16;
 }
 
 ::-webkit-scrollbar {
