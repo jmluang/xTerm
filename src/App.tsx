@@ -97,7 +97,7 @@ function SortableHostRow(props: {
   onRowClick: () => void;
 }) {
   const { host, reorderMode, hostSearch, left, right, onRowClick } = props;
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging, isOver } =
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({ id: host.id });
 
   const showHandle = reorderMode && !hostSearch.trim();
