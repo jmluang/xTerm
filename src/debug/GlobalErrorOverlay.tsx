@@ -18,7 +18,10 @@ export function GlobalErrorOverlay() {
 
   useEffect(() => {
     if (!enabled) return;
-    return subscribe(setErr);
+    const unsubscribe = subscribe(setErr);
+    return () => {
+      unsubscribe();
+    };
   }, [enabled]);
 
   if (!enabled || !err) return null;
@@ -83,4 +86,3 @@ export function GlobalErrorOverlay() {
     </div>
   );
 }
-
