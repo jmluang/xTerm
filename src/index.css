@@ -62,6 +62,18 @@ textarea,
   user-select: text;
 }
 
+/* No session selected: terminal area should be visually present but non-interactive. */
+[data-has-session="0"] .xterm,
+[data-has-session="0"] .xterm * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+[data-has-session="0"] .xterm-screen,
+[data-has-session="0"] .xterm-viewport {
+  pointer-events: none;
+}
+
 html,
 body,
 #root {
