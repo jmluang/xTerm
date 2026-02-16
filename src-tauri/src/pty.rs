@@ -102,17 +102,20 @@ pub async fn pty_spawn<R: Runtime>(
     let app_data = app.clone();
     let id_data = id_s.clone();
     thread::spawn(move || {
-      let mut buf = [0u8; 4096];
-      loop {
+        let mut buf = [0u8; 4096];
+        loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     let data = String::from_utf8_lossy(&buf[..n]).to_string();
                     // Emit to all windows; frontend filters by session_id.
-                    let _ = app_data.emit("pty:data", PtyDataPayload {
-                        session_id: id_data.clone(),
-                        data,
-                    });
+                    let _ = app_data.emit(
+                        "pty:data",
+                        PtyDataPayload {
+                            session_id: id_data.clone(),
+                            data,
+                        },
+                    );
                 }
                 Err(_) => break,
             }
@@ -125,10 +128,13 @@ pub async fn pty_spawn<R: Runtime>(
     let sessions_for_exit = state.sessions.clone();
     thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code()).unwrap_or(1);
-        let _ = app_exit.emit("pty:exit", PtyExitPayload {
-            session_id: id_exit.clone(),
-            code,
-        });
+        let _ = app_exit.emit(
+            "pty:exit",
+            PtyExitPayload {
+                session_id: id_exit.clone(),
+                code,
+            },
+        );
         if let Ok(mut sessions) = sessions_for_exit.lock() {
             sessions.remove(&id);
         }
@@ -138,7 +144,11 @@ pub async fn pty_spawn<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn pty_write(session_id: String, data: String, state: tauri::State<'_, PtyState>) -> Result<(), String> {
+pub async fn pty_write(
+    session_id: String,
+    data: String,
+    state: tauri::State<'_, PtyState>,
+) -> Result<(), String> {
     let id: u32 = session_id.parse().map_err(|_| "invalid session_id")?;
     let session = {
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
@@ -150,7 +160,12 @@ pub async fn pty_write(session_id: String, data: String, state: tauri::State<'_,
 }
 
 #[tauri::command]
-pub async fn pty_resize(session_id: String, cols: u16, rows: u16, state: tauri::State<'_, PtyState>) -> Result<(), String> {
+pub async fn pty_resize(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    state: tauri::State<'_, PtyState>,
+) -> Result<(), String> {
     let id: u32 = session_id.parse().map_err(|_| "invalid session_id")?;
     let session = {
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
