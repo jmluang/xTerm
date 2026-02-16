@@ -4,6 +4,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getThemeMode, type ThemeMode } from "@/lib/theme";
+import { getTerminalTheme, type TerminalThemeId } from "@/lib/terminalTheme";
+import type { TerminalOptionsState } from "@/lib/terminalOptions";
 import type { Session } from "@/types/models";
 import type { SessionRuntimeRefs, SetActiveSessionId, TerminalRefs } from "@/hooks/terminal/types";
 
@@ -11,6 +13,8 @@ type UseTerminalRuntimeParams = {
   isInTauri: boolean;
   sidebarOpen: boolean;
   themeMode: ThemeMode;
+  terminalThemeId: TerminalThemeId;
+  terminalOptions: TerminalOptionsState;
   sessions: Session[];
   activeSessionId: string | null;
   setActiveSessionId: SetActiveSessionId;
@@ -25,7 +29,18 @@ function resolvedTheme(): "light" | "dark" {
 }
 
 export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
-  const { isInTauri, sidebarOpen, themeMode, sessions, activeSessionId, setActiveSessionId, terminalRefs, runtimeRefs } = params;
+  const {
+    isInTauri,
+    sidebarOpen,
+    themeMode,
+    terminalThemeId,
+    terminalOptions,
+    sessions,
+    activeSessionId,
+    setActiveSessionId,
+    terminalRefs,
+    runtimeRefs,
+  } = params;
   const [terminalReady, setTerminalReady] = useState(false);
   const pendingDisposeTimerRef = useRef<number | null>(null);
 
@@ -33,26 +48,34 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const term = terminalRefs.terminalInstance.current;
     if (!term) return;
     try {
-      const theme = resolvedTheme();
+      const appearance = resolvedTheme();
       const cssBackground = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
-      const background = cssBackground || (theme === "dark" ? "#0b0f16" : "#ffffff");
-      term.options.theme =
-        theme === "dark"
-          ? {
-              background,
-              foreground: "#e5e7eb",
-              cursor: "#e5e7eb",
-              selectionBackground: "rgba(148, 163, 184, 0.35)",
-            }
-          : {
-              background,
-              foreground: "#0b1220",
-              cursor: "#0b1220",
-              selectionBackground: "rgba(2, 132, 199, 0.22)",
-            };
+      const background = cssBackground || (appearance === "dark" ? "#0b0f16" : "#ffffff");
+      term.options.theme = getTerminalTheme(terminalThemeId, appearance, background);
       term.refresh(0, term.rows - 1);
     } catch {
       // Ignore; renderer can be temporarily unavailable during init/dispose.
+    }
+  }
+
+  function applyTerminalOptions() {
+    const term = terminalRefs.terminalInstance.current;
+    if (!term) return;
+    try {
+      term.options.fontFamily = terminalOptions.fontFamily;
+      term.options.fontSize = terminalOptions.fontSize;
+      term.options.lineHeight = terminalOptions.lineHeight;
+      term.options.letterSpacing = terminalOptions.letterSpacing;
+      term.options.cursorStyle = terminalOptions.cursorStyle;
+      term.options.bellStyle = terminalOptions.bellStyle;
+      term.options.scrollback = terminalOptions.scrollback;
+      term.options.macOptionIsMeta = terminalOptions.macOptionIsMeta;
+      term.options.rightClickSelectsWord = terminalOptions.rightClickSelectsWord;
+      term.options.drawBoldTextInBrightColors = terminalOptions.drawBoldTextInBrightColors;
+      term.options.cursorBlink = sessions.length > 0 && terminalOptions.cursorBlink;
+      term.refresh(0, term.rows - 1);
+    } catch {
+      // Ignore option updates during init/dispose races.
     }
   }
 
@@ -89,6 +112,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     applyTerminalTheme();
+    applyTerminalOptions();
     if (!window.matchMedia) return;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
@@ -100,7 +124,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (typeof mediaQuery.removeEventListener === "function") mediaQuery.removeEventListener("change", onChange);
       else if (typeof (mediaQuery as any).removeListener === "function") (mediaQuery as any).removeListener(onChange);
     };
-  }, [themeMode]);
+  }, [themeMode, terminalThemeId, terminalOptions]);
 
   useEffect(() => {
     requestAnimationFrame(() => fitAndResizeActivePty());
@@ -116,7 +140,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (loopCount >= 12) window.clearInterval(timerId);
     }, 100);
     return () => window.clearInterval(timerId);
-  }, [terminalReady, sidebarOpen, themeMode]);
+  }, [terminalReady, sidebarOpen, themeMode, terminalThemeId, terminalOptions]);
 
   useEffect(() => {
     if (!isInTauri) return;
@@ -165,8 +189,16 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const term = new Terminal({
       cursorBlink: false,
       cursorInactiveStyle: "none",
-      fontSize: 14,
-      fontFamily: "SF Mono, Menlo, Monaco, 'Courier New', monospace",
+      cursorStyle: terminalOptions.cursorStyle,
+      fontSize: terminalOptions.fontSize,
+      fontFamily: terminalOptions.fontFamily,
+      lineHeight: terminalOptions.lineHeight,
+      letterSpacing: terminalOptions.letterSpacing,
+      bellStyle: terminalOptions.bellStyle,
+      scrollback: terminalOptions.scrollback,
+      macOptionIsMeta: terminalOptions.macOptionIsMeta,
+      rightClickSelectsWord: terminalOptions.rightClickSelectsWord,
+      drawBoldTextInBrightColors: terminalOptions.drawBoldTextInBrightColors,
       theme: { background: "transparent", foreground: "#e5e7eb" },
     });
     const fit = new FitAddon();
@@ -177,6 +209,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     terminalRefs.fitAddon.current = fit;
     setTerminalReady(true);
     applyTerminalTheme();
+    applyTerminalOptions();
 
     const onData = term.onData((data) => {
       const sessionId = terminalRefs.activeSessionIdRef.current;
@@ -228,9 +261,15 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const term = terminalRefs.terminalInstance.current;
     if (!terminalReady || !term) return;
     const hasSession = sessions.length > 0;
-    term.options.cursorBlink = hasSession;
+    term.options.cursorBlink = hasSession && terminalOptions.cursorBlink;
     if (!hasSession) term.blur();
-  }, [sessions.length, terminalReady, terminalRefs.terminalInstance]);
+  }, [sessions.length, terminalReady, terminalRefs.terminalInstance, terminalOptions.cursorBlink]);
+
+  useEffect(() => {
+    if (!terminalReady) return;
+    applyTerminalOptions();
+    requestAnimationFrame(() => fitAndResizeActivePty());
+  }, [terminalReady, terminalOptions]);
 
   useEffect(() => {
     const term = terminalRefs.terminalInstance.current;

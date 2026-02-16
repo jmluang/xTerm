@@ -1,12 +1,15 @@
 import "@xterm/xterm/css/xterm.css";
 import { HostEditorDialog } from "@/components/dialogs/HostEditorDialog";
-import { SettingsDialog } from "@/components/dialogs/SettingsDialog";
-import { WebdavSyncDialog } from "@/components/dialogs/WebdavSyncDialog";
 import { HostsSidebar } from "@/components/layout/HostsSidebar";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
+import { SettingsWindowApp } from "@/components/settings/SettingsWindowApp";
 import { MainPane } from "@/components/layout/MainPane";
 import { useAppController } from "@/hooks/useAppController";
 
 function App() {
+  const panel = new URLSearchParams(window.location.search).get("panel");
+  if (panel === "settings") return <SettingsWindowApp />;
+
   const ctrl = useAppController();
 
   return (
@@ -42,8 +45,12 @@ function App() {
           setActiveSessionId={ctrl.setActiveSessionId}
           sessionIndexById={ctrl.sessionIndexById}
           closeSession={ctrl.closeSession}
-          setShowWebdavSync={ctrl.setShowWebdavSync}
-          setShowSettings={ctrl.setShowSettings}
+          onOpenSyncSettings={() => {
+            void ctrl.openSettings("sync");
+          }}
+          onOpenSettings={() => {
+            void ctrl.openSettings("terminal");
+          }}
           openAddDialog={ctrl.openAddDialog}
           terminalContainerRef={ctrl.terminalContainerRef}
           terminalRef={ctrl.terminalRef}
@@ -66,31 +73,28 @@ function App() {
         </MainPane>
       </div>
 
-      <SettingsDialog
-        open={ctrl.showSettings}
-        onOpenChange={ctrl.setShowSettings}
-        themeMode={ctrl.themeMode}
-        setThemeMode={ctrl.setThemeModeState}
-        onOpenWebdav={() => {
-          ctrl.setShowSettings(false);
-          ctrl.setShowWebdavSync(true);
-        }}
-      />
-
-      <WebdavSyncDialog
-        open={ctrl.showWebdavSync}
-        onOpenChange={ctrl.setShowWebdavSync}
-        settings={ctrl.settings}
-        setSettings={ctrl.setSettings}
-        localHostsDbPath={ctrl.localHostsDbPath}
-        syncBusy={ctrl.syncBusy}
-        syncNotice={ctrl.syncNotice}
-        isInTauri={ctrl.isInTauri}
-        onOpenSettings={() => ctrl.setShowSettings(true)}
-        onSaveSettings={ctrl.saveWebdavSettings}
-        onPull={ctrl.doWebdavPull}
-        onPush={ctrl.doWebdavPush}
-      />
+      {!ctrl.isInTauri ? (
+        <SettingsPanel
+          open={ctrl.showSettings}
+          onOpenChange={ctrl.setShowSettings}
+          initialSection={ctrl.settingsSection}
+          themeMode={ctrl.themeMode}
+          setThemeMode={ctrl.setThemeModeState}
+          terminalThemeId={ctrl.terminalThemeId}
+          setTerminalThemeId={ctrl.setTerminalThemeIdState}
+          terminalOptions={ctrl.terminalOptions}
+          setTerminalOptions={ctrl.setTerminalOptionsState}
+          settings={ctrl.settings}
+          setSettings={ctrl.setSettings}
+          localHostsDbPath={ctrl.localHostsDbPath}
+          syncBusy={ctrl.syncBusy}
+          syncNotice={ctrl.syncNotice}
+          isInTauri={ctrl.isInTauri}
+          onSaveSettings={ctrl.saveWebdavSettings}
+          onPull={ctrl.doWebdavPull}
+          onPush={ctrl.doWebdavPush}
+        />
+      ) : null}
     </div>
   );
 }

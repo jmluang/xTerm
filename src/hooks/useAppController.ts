@@ -1,8 +1,30 @@
 import { useEffect, useState } from "react";
+import { listen, emitTo } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme";
+import { TERMINAL_THEME_OPTIONS, getTerminalThemeId, setTerminalThemeId, type TerminalThemeId } from "@/lib/terminalTheme";
+import {
+  getTerminalOptions,
+  sanitizeTerminalOptions,
+  setTerminalOptions,
+  type TerminalOptionsState,
+} from "@/lib/terminalOptions";
+import {
+  SETTINGS_NAVIGATE_EVENT,
+  SETTINGS_TERMINAL_OPTIONS_EVENT,
+  SETTINGS_TERMINAL_THEME_EVENT,
+  SETTINGS_THEME_MODE_EVENT,
+  type SettingsNavigatePayload,
+  type SettingsTerminalOptionsPayload,
+  type SettingsTerminalThemePayload,
+  type SettingsThemeModePayload,
+} from "@/lib/settingsEvents";
 import { useHostsManager } from "@/hooks/useHostsManager";
 import { useTerminalSessions } from "@/hooks/useTerminalSessions";
 import { useWebdavSync } from "@/hooks/useWebdavSync";
+import type { SettingsSection } from "@/types/settings";
+
+const TERMINAL_THEME_IDS = new Set<string>(TERMINAL_THEME_OPTIONS.map((option) => option.id));
 
 export function useAppController() {
   const [isInTauri] = useState(() => {
@@ -10,10 +32,12 @@ export function useAppController() {
     return !!(w.__TAURI__ || w.__TAURI_INTERNALS__);
   });
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
+  const [terminalThemeId, setTerminalThemeIdState] = useState<TerminalThemeId>(() => getTerminalThemeId());
+  const [terminalOptions, setTerminalOptionsState] = useState<TerminalOptionsState>(() => getTerminalOptions());
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("xtermius_sidebar_open") !== "0");
   const [, setActiveDragHostId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showWebdavSync, setShowWebdavSync] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("terminal");
 
   const hostsMgr = useHostsManager({ isInTauri, sidebarOpen });
   const terminal = useTerminalSessions({
@@ -21,6 +45,8 @@ export function useAppController() {
     hosts: hostsMgr.hosts,
     sidebarOpen,
     themeMode,
+    terminalThemeId,
+    terminalOptions,
   });
   const webdav = useWebdavSync({
     isInTauri,
@@ -37,6 +63,14 @@ export function useAppController() {
   }, [themeMode]);
 
   useEffect(() => {
+    setTerminalThemeId(terminalThemeId);
+  }, [terminalThemeId]);
+
+  useEffect(() => {
+    setTerminalOptions(terminalOptions);
+  }, [terminalOptions]);
+
+  useEffect(() => {
     localStorage.setItem("xtermius_sidebar_open", sidebarOpen ? "1" : "0");
   }, [sidebarOpen]);
 
@@ -47,10 +81,98 @@ export function useAppController() {
   }, [showSettings, isInTauri]);
 
   useEffect(() => {
-    if (!showWebdavSync) return;
     if (!isInTauri) return;
-    void webdav.refreshSettingsFromBackend();
-  }, [showWebdavSync, isInTauri]);
+    let unlistenThemeMode: (() => void) | null = null;
+    let unlistenTerminalTheme: (() => void) | null = null;
+    let unlistenTerminalOptions: (() => void) | null = null;
+
+    (async () => {
+      try {
+        unlistenThemeMode = await listen<SettingsThemeModePayload>(SETTINGS_THEME_MODE_EVENT, (event) => {
+          const mode = event.payload?.mode;
+          if (mode === "system" || mode === "light" || mode === "dark") {
+            setThemeModeState(mode);
+          }
+        });
+
+        unlistenTerminalTheme = await listen<SettingsTerminalThemePayload>(SETTINGS_TERMINAL_THEME_EVENT, (event) => {
+          const themeId = event.payload?.themeId;
+          if (typeof themeId === "string" && TERMINAL_THEME_IDS.has(themeId)) {
+            setTerminalThemeIdState(themeId as TerminalThemeId);
+          }
+        });
+
+        unlistenTerminalOptions = await listen<SettingsTerminalOptionsPayload>(SETTINGS_TERMINAL_OPTIONS_EVENT, (event) => {
+          const options = event.payload?.options;
+          if (!options) return;
+          setTerminalOptionsState(sanitizeTerminalOptions(options));
+        });
+      } catch (error) {
+        console.debug("[settings-window] event listeners unavailable", error);
+      }
+    })();
+
+    return () => {
+      try {
+        unlistenThemeMode?.();
+      } catch {
+        // ignore
+      }
+      try {
+        unlistenTerminalTheme?.();
+      } catch {
+        // ignore
+      }
+      try {
+        unlistenTerminalOptions?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [isInTauri]);
+
+  async function openSettings(section: SettingsSection = "terminal") {
+    setSettingsSection(section);
+    if (!isInTauri) {
+      setShowSettings(true);
+      return;
+    }
+    try {
+      const existing = await WebviewWindow.getByLabel("settings");
+      if (existing) {
+        await existing.show();
+        await existing.setFocus();
+        await emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section });
+        return;
+      }
+
+      const url = `/?panel=settings&section=${section}`;
+      const settingsWindow = new WebviewWindow("settings", {
+        title: "Settings",
+        url,
+        width: 1000,
+        height: 760,
+        minWidth: 860,
+        minHeight: 620,
+        center: true,
+        resizable: true,
+        decorations: true,
+        hiddenTitle: true,
+        titleBarStyle: "overlay",
+        trafficLightPosition: { x: 12, y: 18 },
+        focus: true,
+      });
+
+      settingsWindow.once("tauri://created", () => {
+        void emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section });
+      });
+      settingsWindow.once("tauri://error", (error) => {
+        console.error("[settings-window] failed to create window", error);
+      });
+    } catch (error) {
+      console.error("[settings-window] open failed", error);
+    }
+  }
 
   return {
     hosts: hostsMgr.hosts,
@@ -69,8 +191,9 @@ export function useAppController() {
     setShowDialog: hostsMgr.setShowDialog,
     showSettings,
     setShowSettings,
-    showWebdavSync,
-    setShowWebdavSync,
+    settingsSection,
+    setSettingsSection,
+    openSettings,
     settings: webdav.settings,
     setSettings: webdav.setSettings,
     syncBusy: webdav.syncBusy,
@@ -85,6 +208,10 @@ export function useAppController() {
     terminalInstance: terminal.terminalInstance,
     themeMode,
     setThemeModeState,
+    terminalThemeId,
+    setTerminalThemeIdState,
+    terminalOptions,
+    setTerminalOptionsState,
     sidebarOpen,
     setSidebarOpen,
     sortedHosts: hostsMgr.sortedHosts,

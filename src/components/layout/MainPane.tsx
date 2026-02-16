@@ -10,8 +10,8 @@ export function MainPane(props: {
   setActiveSessionId: Dispatch<SetStateAction<string | null>>;
   sessionIndexById: Map<string, number>;
   closeSession: (sessionId: string, reason?: "user" | "timeout" | "unknown") => Promise<void>;
-  setShowWebdavSync: Dispatch<SetStateAction<boolean>>;
-  setShowSettings: Dispatch<SetStateAction<boolean>>;
+  onOpenSyncSettings: () => void;
+  onOpenSettings: () => void;
   openAddDialog: () => void;
   terminalContainerRef: RefObject<HTMLDivElement>;
   terminalRef: RefObject<HTMLDivElement>;
@@ -28,8 +28,8 @@ export function MainPane(props: {
     setActiveSessionId,
     sessionIndexById,
     closeSession,
-    setShowWebdavSync,
-    setShowSettings,
+    onOpenSyncSettings,
+    onOpenSettings,
     openAddDialog,
     terminalContainerRef,
     terminalRef,
@@ -129,7 +129,7 @@ export function MainPane(props: {
           <button
             type="button"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
-            onClick={() => setShowWebdavSync(true)}
+            onClick={onOpenSyncSettings}
             title="WebDAV Sync"
             aria-label="WebDAV Sync"
           >
@@ -138,7 +138,7 @@ export function MainPane(props: {
           <button
             type="button"
             className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
-            onClick={() => setShowSettings(true)}
+            onClick={onOpenSettings}
             title="Settings"
             aria-label="Settings"
           >
