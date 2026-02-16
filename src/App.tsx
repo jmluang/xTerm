@@ -497,14 +497,23 @@ function App() {
       const { session_id } = event.payload;
       const exitCode = event.payload.code;
       const endedAt = Date.now();
+      const reason = sessionCloseReason.current.get(session_id) ?? "unknown";
+      const shouldKeepFailedTab = reason === "timeout" || (reason === "unknown" && exitCode !== 0);
 
-      // Mark the tab as exited; do NOT auto-close it. Users can close manually.
-      setSessions((prev) =>
-        prev.map((s) => (s.id === session_id ? { ...s, status: "exited", exitCode, endedAt } : s))
-      );
+      if (shouldKeepFailedTab) {
+        // Keep failed sessions visible for diagnosis (e.g. network timeout / auth failure).
+        setSessions((prev) =>
+          prev.map((s) => (s.id === session_id ? { ...s, status: "exited", exitCode, endedAt } : s))
+        );
+      } else {
+        // Successful natural exit (`exit`) and user-close should remove the tab.
+        setSessions((prev) => prev.filter((s) => s.id !== session_id));
+        if (activeSessionIdRef.current === session_id) {
+          setActiveSessionId(null);
+        }
+      }
 
       const meta = sessionMeta.current.get(session_id);
-      const reason = sessionCloseReason.current.get(session_id) ?? "unknown";
 
       // Stop "connecting" indicators/timers.
       sessionMeta.current.delete(session_id);
@@ -530,31 +539,12 @@ function App() {
         });
       }
 
-      // Append a clear footer into the session output so the failure is visible inside the tab.
-      // For failed sessions, keep only the latest attempt output (no historical/previous failure footers).
-      const rawTail = (sessionPromptTails.current.get(session_id) ?? "").trim();
-      const reasonText =
-        reason === "timeout"
-          ? "Connection timed out (no output)."
-          : reason === "user"
-            ? "Closed by user."
-            : "Session exited.";
-      const metaLine = meta
-        ? ` host="${meta.hostLabel}" startedAt=${new Date(meta.startedAt).toLocaleString()}`
-        : "";
-      const footer = `\r\n\r\n[${new Date(endedAt).toLocaleString()}] [${reasonText} exitCode=${exitCode}]${metaLine}\r\n`;
-      const report = `${rawTail}${rawTail ? "\r\n" : ""}${footer}`;
-
-      let nextBuf = report;
-      if (nextBuf.length > MAX_SESSION_BUFFER_CHARS) nextBuf = nextBuf.slice(nextBuf.length - MAX_SESSION_BUFFER_CHARS);
-      sessionBuffers.current.set(session_id, nextBuf);
-      sessionPromptTails.current.delete(session_id);
-
-      if (terminalInstance.current && activeSessionIdRef.current === session_id) {
-        terminalInstance.current.reset();
-        applyTerminalTheme();
-        terminalInstance.current.write(nextBuf);
+      if (!shouldKeepFailedTab) {
+        sessionBuffers.current.delete(session_id);
       }
+      sessionPromptTails.current.delete(session_id);
+      sessionAutoPasswords.current.delete(session_id);
+      sessionAutoPasswordSent.current.delete(session_id);
     });
 
     return () => {
@@ -567,13 +557,16 @@ function App() {
     // When there is no active session, keep the terminal view clean.
     if (!terminalReady) return;
     if (sessions.length !== 0) return;
+    terminalInstance.current?.clearSelection();
+    terminalInstance.current?.blur();
     terminalInstance.current?.clear();
   }, [sessions.length, terminalReady]);
 
   useEffect(() => {
     if (terminalRef.current && !terminalInstance.current) {
       const term = new Terminal({
-        cursorBlink: true,
+        cursorBlink: false,
+        cursorInactiveStyle: "none",
         fontSize: 14,
         fontFamily: "SF Mono, Menlo, Monaco, 'Courier New', monospace",
         theme: { background: "transparent", foreground: "#e5e7eb" },
@@ -584,7 +577,6 @@ function App() {
       fit.fit();
       terminalInstance.current = term;
       applyTerminalTheme();
-      term.focus();
       fitAddon.current = fit;
       setTerminalReady(true);
 
@@ -624,6 +616,14 @@ function App() {
       resizeDebounceTimer.current = null;
     };
   }, [isInTauri]);
+
+  useEffect(() => {
+    const term = terminalInstance.current;
+    if (!terminalReady || !term) return;
+    const hasSession = sessions.length > 0;
+    term.options.cursorBlink = hasSession;
+    if (!hasSession) term.blur();
+  }, [sessions.length, terminalReady]);
 
   useEffect(() => {
     const term = terminalInstance.current;
@@ -823,7 +823,9 @@ function App() {
       window.clearTimeout(t);
       sessionConnectTimers.current.delete(sessionId);
     }
-    sessionCloseReason.current.delete(sessionId);
+    if (reason === "user") {
+      sessionCloseReason.current.delete(sessionId);
+    }
   }
 
   async function selectIdentityFile() {
@@ -1430,10 +1432,21 @@ function App() {
               <div
                 ref={terminalContainerRef}
                 className="h-full w-full min-h-0 rounded-xl p-2 overflow-hidden"
+                data-has-session={sessions.length > 0 ? "1" : "0"}
                 style={{ background: "var(--app-term-bg)" } as any}
-                onMouseDown={() => terminalInstance.current?.focus()}
+                onMouseDown={() => {
+                  if (activeSessionId) terminalInstance.current?.focus();
+                }}
               >
-                <div ref={terminalRef} className="h-full w-full" />
+                <div
+                  ref={terminalRef}
+                  className="h-full w-full"
+                  style={
+                    sessions.length === 0
+                      ? ({ visibility: "hidden", pointerEvents: "none" } as any)
+                      : undefined
+                  }
+                />
               </div>
               {sessions.length === 0 ? (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
