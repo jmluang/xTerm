@@ -7,14 +7,18 @@ import { useSessionActions } from "@/hooks/terminal/actions";
 import { useTerminalRuntime } from "@/hooks/terminal/runtime";
 import type { SessionRuntimeRefs, TerminalRefs } from "@/hooks/terminal/types";
 import type { ThemeMode } from "@/lib/theme";
+import type { TerminalThemeId } from "@/lib/terminalTheme";
+import type { TerminalOptionsState } from "@/lib/terminalOptions";
 
 export function useTerminalSessions(params: {
   isInTauri: boolean;
   hosts: Host[];
   sidebarOpen: boolean;
   themeMode: ThemeMode;
+  terminalThemeId: TerminalThemeId;
+  terminalOptions: TerminalOptionsState;
 }) {
-  const { isInTauri, hosts, sidebarOpen, themeMode } = params;
+  const { isInTauri, hosts, sidebarOpen, themeMode, terminalThemeId, terminalOptions } = params;
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [connectingHosts, setConnectingHosts] = useState<
@@ -87,6 +91,8 @@ export function useTerminalSessions(params: {
     isInTauri,
     sidebarOpen,
     themeMode,
+    terminalThemeId,
+    terminalOptions,
     sessions,
     activeSessionId,
     setActiveSessionId,
