@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen, emitTo } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { getThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme";
 import { TERMINAL_THEME_OPTIONS, getTerminalThemeId, setTerminalThemeId, type TerminalThemeId } from "@/lib/terminalTheme";
 import {
@@ -159,7 +160,7 @@ export function useAppController() {
         decorations: true,
         hiddenTitle: true,
         titleBarStyle: "overlay",
-        trafficLightPosition: { x: 12, y: 18 },
+        trafficLightPosition: new LogicalPosition(12, 18),
         focus: true,
       });
 
