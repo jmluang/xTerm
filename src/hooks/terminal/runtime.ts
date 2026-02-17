@@ -96,7 +96,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       term.options.lineHeight = terminalOptions.lineHeight;
       term.options.letterSpacing = terminalOptions.letterSpacing;
       term.options.cursorStyle = terminalOptions.cursorStyle;
-      term.options.bellStyle = terminalOptions.bellStyle;
       term.options.scrollback = terminalOptions.scrollback;
       term.options.macOptionIsMeta = terminalOptions.macOptionIsMeta;
       term.options.rightClickSelectsWord = terminalOptions.rightClickSelectsWord;
@@ -252,7 +251,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       fontFamily: terminalOptions.fontFamily,
       lineHeight: terminalOptions.lineHeight,
       letterSpacing: terminalOptions.letterSpacing,
-      bellStyle: terminalOptions.bellStyle,
       scrollback: terminalOptions.scrollback,
       macOptionIsMeta: terminalOptions.macOptionIsMeta,
       rightClickSelectsWord: terminalOptions.rightClickSelectsWord,
