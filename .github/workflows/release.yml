@@ -16,16 +16,10 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: bundles-macos-aarch64
             upload_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: bundles-macos-x86_64
             upload_glob: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: bundles-windows-x86_64
-            upload_glob: |
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -73,6 +67,6 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          artifacts: "release-assets/**/*.dmg,release-assets/**/*.msi,release-assets/**/*.exe"
+          artifacts: "release-assets/**/*.dmg"
           token: ${{ secrets.GITHUB_TOKEN }}
           generateReleaseNotes: true
