@@ -1,4 +1,4 @@
-name: Build DMG
+name: Build Release Bundles
 
 on:
   push:
@@ -10,8 +10,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos-dmg:
-    runs-on: macos-14
+  build-bundles:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: xtermius-macos-aarch64
+            bundle_dir: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg
+            bundle_pattern: "*.dmg"
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: xtermius-macos-x86_64
+            bundle_dir: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg
+            bundle_pattern: "*.dmg"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: xtermius-windows-x86_64
+            bundle_dir: src-tauri/target/x86_64-pc-windows-msvc/release/bundle
+            bundle_pattern: "*.msi *.exe"
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
 
@@ -27,36 +46,48 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install frontend deps
         run: npm ci
 
       - name: Build Tauri app bundle
-        run: npm run tauri build
+        run: npm run tauri build -- --target ${{ matrix.target }}
 
-      - name: Locate DMG
-        id: find_dmg
+      - name: Locate bundle files
+        id: find_bundles
         shell: bash
         run: |
           set -euo pipefail
-          DMG_PATH="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
-          if [[ -z "${DMG_PATH}" ]]; then
-            echo "No DMG found under src-tauri/target/release/bundle/dmg"
+          IFS=' ' read -r -a patterns <<< "${{ matrix.bundle_pattern }}"
+          files=()
+          for pattern in "${patterns[@]}"; do
+            while IFS= read -r file; do
+              files+=("$file")
+            done < <(find "${{ matrix.bundle_dir }}" -name "$pattern" -print)
+          done
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No bundle files found under ${{ matrix.bundle_dir }} matching: ${{ matrix.bundle_pattern }}"
             exit 1
           fi
-          echo "dmg_path=${DMG_PATH}" >> "$GITHUB_OUTPUT"
-          echo "dmg_name=$(basename "${DMG_PATH}")" >> "$GITHUB_OUTPUT"
+          {
+            echo "bundle_files<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Found bundle files:\n%s\n' "${files[*]}"
 
-      - name: Upload DMG artifact
+      - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xtermius-dmg
-          path: ${{ steps.find_dmg.outputs.dmg_path }}
+          name: ${{ matrix.artifact_name }}
+          path: ${{ steps.find_bundles.outputs.bundle_files }}
           if-no-files-found: error
 
-      - name: Publish GitHub Release asset (tags only)
+      - name: Publish GitHub Release assets (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.find_dmg.outputs.dmg_path }}
+          files: ${{ steps.find_bundles.outputs.bundle_files }}
           generate_release_notes: true
