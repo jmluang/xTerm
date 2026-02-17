@@ -188,7 +188,7 @@ export function useSessionActions(params: UseSessionActionsParams) {
 
       setSessions((prev) => [
         ...prev,
-        { id: sessionId.toString(), hostAlias: host.alias, hostId: host.id, startedAt, status: "running" },
+        { id: sessionId.toString(), hostAlias: host.alias, hostId: host.id, startedAt, status: "starting" },
       ]);
       setActiveSessionId(sessionId.toString());
       requestAnimationFrame(() => terminalRefs.terminalInstance.current?.focus());

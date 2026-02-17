@@ -12,11 +12,6 @@
     "core:window:allow-start-dragging",
     "shell:allow-open",
     "dialog:default",
-    "dialog:allow-open",
-    "pty:default",
-    "pty:allow-spawn",
-    "pty:allow-write",
-    "pty:allow-resize",
-    "pty:allow-kill"
+    "dialog:allow-open"
   ]
 }

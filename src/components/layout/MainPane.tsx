@@ -69,6 +69,7 @@ export function MainPane(props: {
               {sessions.map((session) => {
                 const active = session.id === activeSessionId;
                 const exited = session.status === "exited";
+                const starting = session.status === "starting";
                 const idx = sessionIndexById.get(session.id) ?? 1;
                 return (
                   <div
@@ -85,13 +86,16 @@ export function MainPane(props: {
                     title={
                       exited
                         ? `${session.hostAlias} #${idx} (exited${typeof session.exitCode === "number" ? `, code ${session.exitCode}` : ""})`
-                        : `${session.hostAlias} #${idx}`
+                        : starting
+                          ? `${session.hostAlias} #${idx} (connecting...)`
+                          : `${session.hostAlias} #${idx}`
                     }
                     aria-label={`Switch to ${session.hostAlias}`}
                     data-tauri-drag-region
                     style={{ WebkitAppRegion: "drag" } as any}
                   >
                     {exited ? <span className="h-2 w-2 rounded-full bg-red-500/70" aria-hidden="true" /> : null}
+                    {starting ? <span className="h-2 w-2 rounded-full bg-amber-400/80" aria-hidden="true" /> : null}
                     {idx > 1 ? <span className="text-[11px] font-semibold opacity-70">#{idx}</span> : null}
                     <span className="text-sm font-semibold leading-none whitespace-nowrap">{session.hostAlias}</span>
                     <button

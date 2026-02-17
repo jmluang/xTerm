@@ -9,6 +9,7 @@ pub fn run() {
             crate::host_store::hosts_load,
             crate::host_store::hosts_save,
             crate::ssh_config::generate_ssh_config,
+            crate::ssh_import::ssh_config_scan_importable_hosts,
             crate::host_store::settings_load,
             crate::host_store::settings_save,
             crate::webdav_sync::webdav_pull,

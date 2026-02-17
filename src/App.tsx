@@ -1,5 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import { HostEditorDialog } from "@/components/dialogs/HostEditorDialog";
+import { SshConfigImportDialog } from "@/components/dialogs/SshConfigImportDialog";
 import { HostsSidebar } from "@/components/layout/HostsSidebar";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { SettingsWindowApp } from "@/components/settings/SettingsWindowApp";
@@ -32,6 +33,8 @@ function App() {
             deleteHost={ctrl.deleteHost}
             connectToHost={ctrl.connectToHost}
             openAddDialog={ctrl.openAddDialog}
+            openSshImportDialog={ctrl.openSshImportDialog}
+            sshImportLoading={ctrl.sshImportLoading}
             isInTauri={ctrl.isInTauri}
             setSidebarOpen={ctrl.setSidebarOpen}
           />
@@ -69,6 +72,13 @@ function App() {
             isInTauri={ctrl.isInTauri}
             selectIdentityFile={ctrl.selectIdentityFile}
             onSave={ctrl.handleSave}
+          />
+          <SshConfigImportDialog
+            open={ctrl.showSshImportDialog}
+            loading={ctrl.sshImportLoading}
+            candidates={ctrl.sshImportCandidates}
+            onClose={() => ctrl.setShowSshImportDialog(false)}
+            onImport={ctrl.importSshConfigHosts}
           />
         </MainPane>
       </div>

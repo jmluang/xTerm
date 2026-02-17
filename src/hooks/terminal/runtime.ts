@@ -8,6 +8,15 @@ import { getTerminalTheme, type TerminalThemeId } from "@/lib/terminalTheme";
 import type { TerminalOptionsState } from "@/lib/terminalOptions";
 import type { Session } from "@/types/models";
 import type { SessionRuntimeRefs, SetActiveSessionId, TerminalRefs } from "@/hooks/terminal/types";
+import { readSessionBuffer } from "@/hooks/terminal/sessionBuffer";
+import {
+  markFirstTerminalReady,
+  recordFitCall,
+  recordPtyResize,
+  recordResizeSignal,
+  recordTabSwitchLatency,
+  sampleMemory,
+} from "@/lib/perfMetrics";
 
 type UseTerminalRuntimeParams = {
   isInTauri: boolean;
@@ -20,6 +29,12 @@ type UseTerminalRuntimeParams = {
   setActiveSessionId: SetActiveSessionId;
   terminalRefs: TerminalRefs;
   runtimeRefs: Pick<SessionRuntimeRefs, "sessionBuffers">;
+};
+
+type PtySizeState = {
+  sessionId: string;
+  cols: number;
+  rows: number;
 };
 
 function resolvedTheme(): "light" | "dark" {
@@ -43,6 +58,20 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   } = params;
   const [terminalReady, setTerminalReady] = useState(false);
   const pendingDisposeTimerRef = useRef<number | null>(null);
+  const fitTimerRef = useRef<number | null>(null);
+  const fitRafRef = useRef<number | null>(null);
+  const lastSentPtySizeRef = useRef<PtySizeState | null>(null);
+
+  function clearScheduledFit() {
+    if (fitTimerRef.current !== null) {
+      window.clearTimeout(fitTimerRef.current);
+      fitTimerRef.current = null;
+    }
+    if (fitRafRef.current !== null) {
+      window.cancelAnimationFrame(fitRafRef.current);
+      fitRafRef.current = null;
+    }
+  }
 
   function applyTerminalTheme() {
     const term = terminalRefs.terminalInstance.current;
@@ -95,24 +124,61 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const sessionId = terminalRefs.activeSessionIdRef.current;
     if (!term || !fit) return;
 
+    recordFitCall();
     const fitOk = safeFit(fit);
     if (!fitOk) return;
 
     if (!sessionId || !isInTauri) return;
+    const nextCols = term.cols;
+    const nextRows = term.rows;
+    const prev = lastSentPtySizeRef.current;
+    if (prev && prev.sessionId === sessionId && prev.cols === nextCols && prev.rows === nextRows) return;
+
+    lastSentPtySizeRef.current = { sessionId, cols: nextCols, rows: nextRows };
+    recordPtyResize(nextCols, nextRows);
     invoke("pty_resize", {
       sessionId,
-      cols: term.cols,
-      rows: term.rows,
-    }).catch((error) => console.error("[pty] resize error", error));
+      cols: nextCols,
+      rows: nextRows,
+    }).catch((error) => {
+      console.error("[pty] resize error", error);
+      lastSentPtySizeRef.current = null;
+    });
+  }
+
+  function scheduleFitAndResize(delayMs = 50) {
+    recordResizeSignal();
+    if (fitTimerRef.current !== null) {
+      window.clearTimeout(fitTimerRef.current);
+    }
+    fitTimerRef.current = window.setTimeout(() => {
+      fitTimerRef.current = null;
+      if (fitRafRef.current !== null) {
+        window.cancelAnimationFrame(fitRafRef.current);
+      }
+      fitRafRef.current = window.requestAnimationFrame(() => {
+        fitRafRef.current = null;
+        fitAndResizeActivePty();
+      });
+    }, Math.max(0, delayMs));
   }
 
   useEffect(() => {
     terminalRefs.activeSessionIdRef.current = activeSessionId;
+    lastSentPtySizeRef.current = null;
   }, [activeSessionId, terminalRefs.activeSessionIdRef]);
 
   useEffect(() => {
     applyTerminalTheme();
+  }, [themeMode, terminalThemeId]);
+
+  useEffect(() => {
     applyTerminalOptions();
+    if (!terminalReady) return;
+    scheduleFitAndResize(20);
+  }, [terminalOptions, sessions.length, terminalReady]);
+
+  useEffect(() => {
     if (!window.matchMedia) return;
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
@@ -124,23 +190,12 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (typeof mediaQuery.removeEventListener === "function") mediaQuery.removeEventListener("change", onChange);
       else if (typeof (mediaQuery as any).removeListener === "function") (mediaQuery as any).removeListener(onChange);
     };
-  }, [themeMode, terminalThemeId, terminalOptions]);
-
-  useEffect(() => {
-    requestAnimationFrame(() => fitAndResizeActivePty());
-    window.setTimeout(() => fitAndResizeActivePty(), 120);
-  }, [sidebarOpen]);
+  }, []);
 
   useEffect(() => {
     if (!terminalReady) return;
-    let loopCount = 0;
-    const timerId = window.setInterval(() => {
-      fitAndResizeActivePty();
-      loopCount += 1;
-      if (loopCount >= 12) window.clearInterval(timerId);
-    }, 100);
-    return () => window.clearInterval(timerId);
-  }, [terminalReady, sidebarOpen, themeMode, terminalThemeId, terminalOptions]);
+    scheduleFitAndResize(20);
+  }, [sidebarOpen, terminalReady]);
 
   useEffect(() => {
     if (!isInTauri) return;
@@ -149,8 +204,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       try {
         const currentWindow = getCurrentWindow();
         unlisten = await currentWindow.onResized(() => {
-          requestAnimationFrame(() => fitAndResizeActivePty());
-          window.setTimeout(() => fitAndResizeActivePty(), 120);
+          scheduleFitAndResize(30);
         });
       } catch (error) {
         console.debug("[ui] window.onResized unavailable", error);
@@ -163,13 +217,17 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         // ignore
       }
     };
-  }, [isInTauri]);
+  }, [isInTauri, terminalReady]);
 
   useEffect(() => {
     if (sessions.length === 0) return;
     if (activeSessionId && sessions.some((session) => session.id === activeSessionId)) return;
     setActiveSessionId(sessions[0].id);
   }, [sessions, activeSessionId, setActiveSessionId]);
+
+  useEffect(() => {
+    sampleMemory(sessions.length);
+  }, [sessions.length]);
 
   useEffect(() => {
     if (!terminalReady) return;
@@ -208,19 +266,22 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     terminalRefs.terminalInstance.current = term;
     terminalRefs.fitAddon.current = fit;
     setTerminalReady(true);
+    markFirstTerminalReady();
     applyTerminalTheme();
     applyTerminalOptions();
+    scheduleFitAndResize(0);
 
     const onData = term.onData((data) => {
       const sessionId = terminalRefs.activeSessionIdRef.current;
       if (!sessionId || !isInTauri) return;
       invoke("pty_write", { sessionId, data }).catch((error) => console.error("[pty] write error", error));
     });
-    const onResize = () => fitAndResizeActivePty();
+    const onResize = () => scheduleFitAndResize(30);
     window.addEventListener("resize", onResize);
 
     return () => {
       pendingDisposeTimerRef.current = window.setTimeout(() => {
+        clearScheduledFit();
         onData.dispose();
         window.removeEventListener("resize", onResize);
         try {
@@ -232,6 +293,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
           terminalRefs.terminalInstance.current = null;
           terminalRefs.fitAddon.current = null;
         }
+        lastSentPtySizeRef.current = null;
         setTerminalReady(false);
         pendingDisposeTimerRef.current = null;
       }, 0);
@@ -243,48 +305,42 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     if (!element) return;
 
     const observer = new ResizeObserver(() => {
-      if (terminalRefs.resizeDebounceTimer.current) window.clearTimeout(terminalRefs.resizeDebounceTimer.current);
-      terminalRefs.resizeDebounceTimer.current = window.setTimeout(() => {
-        fitAndResizeActivePty();
-      }, 50);
+      scheduleFitAndResize(50);
     });
     observer.observe(element);
 
     return () => {
       observer.disconnect();
-      if (terminalRefs.resizeDebounceTimer.current) window.clearTimeout(terminalRefs.resizeDebounceTimer.current);
-      terminalRefs.resizeDebounceTimer.current = null;
     };
-  }, [isInTauri]);
-
-  useEffect(() => {
-    const term = terminalRefs.terminalInstance.current;
-    if (!terminalReady || !term) return;
-    const hasSession = sessions.length > 0;
-    term.options.cursorBlink = hasSession && terminalOptions.cursorBlink;
-    if (!hasSession) term.blur();
-  }, [sessions.length, terminalReady, terminalRefs.terminalInstance, terminalOptions.cursorBlink]);
-
-  useEffect(() => {
-    if (!terminalReady) return;
-    applyTerminalOptions();
-    requestAnimationFrame(() => fitAndResizeActivePty());
-  }, [terminalReady, terminalOptions]);
+  }, [isInTauri, terminalReady]);
 
   useEffect(() => {
     const term = terminalRefs.terminalInstance.current;
     if (!terminalReady || !term) return;
     if (!activeSessionId) return;
 
+    const start = performance.now();
     try {
       term.reset();
     } catch {
       return;
     }
+
     applyTerminalTheme();
-    const buffer = runtimeRefs.sessionBuffers.current.get(activeSessionId);
-    if (buffer) term.write(buffer);
-    requestAnimationFrame(() => fitAndResizeActivePty());
-    requestAnimationFrame(() => term.focus());
+    const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
+
+    const finishSwitch = () => {
+      scheduleFitAndResize(0);
+      window.requestAnimationFrame(() => {
+        term.focus();
+        recordTabSwitchLatency(performance.now() - start);
+      });
+    };
+
+    if (text) {
+      term.write(text, finishSwitch);
+    } else {
+      finishSwitch();
+    }
   }, [activeSessionId, runtimeRefs.sessionBuffers, terminalReady]);
 }

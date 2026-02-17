@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, message, open } from "@tauri-apps/plugin-dialog";
-import type { Host } from "@/types/models";
+import type { Host, SshConfigImportCandidate } from "@/types/models";
 
 export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boolean }) {
   const { isInTauri, sidebarOpen } = params;
@@ -14,6 +14,9 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
   const [showDialog, setShowDialog] = useState(false);
   const [editingHost, setEditingHost] = useState<Host | null>(null);
   const [formData, setFormData] = useState<Partial<Host>>({});
+  const [showSshImportDialog, setShowSshImportDialog] = useState(false);
+  const [sshImportLoading, setSshImportLoading] = useState(false);
+  const [sshImportCandidates, setSshImportCandidates] = useState<SshConfigImportCandidate[]>([]);
 
   useEffect(() => {
     hostsRef.current = hosts;
@@ -95,6 +98,122 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
     setEditingHost(null);
     setFormData({ name: "", alias: "", hostname: "", user: "", port: 22, tags: [], notes: "" });
     setShowDialog(true);
+  }
+
+  async function openSshImportDialog() {
+    if (!isInTauri) {
+      alert("SSH config import only works in the desktop app.");
+      return;
+    }
+
+    setSshImportLoading(true);
+    try {
+      const candidates = await invoke<SshConfigImportCandidate[]>("ssh_config_scan_importable_hosts");
+      if (candidates.length === 0) {
+        await message("No importable hosts found in ~/.ssh config files.", {
+          title: "SSH Config Import",
+          kind: "info",
+        });
+        return;
+      }
+      setSshImportCandidates(candidates);
+      setShowSshImportDialog(true);
+    } catch (error) {
+      await message(`Failed to scan ~/.ssh config.\n\n${String(error)}`, {
+        title: "SSH Config Import",
+        kind: "error",
+      });
+    } finally {
+      setSshImportLoading(false);
+    }
+  }
+
+  async function importSshConfigHosts(selectedAliases: string[]) {
+    if (selectedAliases.length === 0) return;
+
+    const selected = sshImportCandidates.filter((item) => selectedAliases.includes(item.alias));
+    if (selected.length === 0) return;
+
+    const now = new Date().toISOString();
+    const aliveHosts = hosts.filter((h) => !h.deleted);
+    const maxSortOrder = aliveHosts.reduce((max, host, index) => {
+      const value = typeof host.sortOrder === "number" ? host.sortOrder : index;
+      return Math.max(max, value);
+    }, -1);
+
+    const existingAlias = new Set(aliveHosts.map((h) => (h.alias || "").trim().toLowerCase()).filter(Boolean));
+    const existingEndpoint = new Set(
+      aliveHosts
+        .map((h) => `${(h.user || "").trim().toLowerCase()}@${(h.hostname || "").trim().toLowerCase()}:${h.port || 22}`)
+        .filter(Boolean)
+    );
+
+    let imported = 0;
+    let skipped = 0;
+    const append: Host[] = [];
+    for (const [index, item] of selected.entries()) {
+      const alias = (item.alias || "").trim();
+      const hostname = (item.hostname || alias).trim();
+      const user = (item.user || "").trim();
+      const port = item.port || 22;
+      const aliasKey = alias.toLowerCase();
+      const endpointKey = `${user.toLowerCase()}@${hostname.toLowerCase()}:${port}`;
+
+      if (!alias || !hostname) {
+        skipped += 1;
+        continue;
+      }
+      if (existingAlias.has(aliasKey) || existingEndpoint.has(endpointKey)) {
+        skipped += 1;
+        continue;
+      }
+
+      append.push({
+        id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+        name: hostname,
+        alias,
+        hostname,
+        user,
+        port,
+        hasPassword: false,
+        identityFile: item.identityFile,
+        proxyJump: item.proxyJump,
+        envVars: "",
+        encoding: "utf-8",
+        sortOrder: maxSortOrder + imported + 1,
+        tags: [],
+        notes: `Imported from ${item.sourcePath}`,
+        updatedAt: now,
+        deleted: false,
+      });
+      existingAlias.add(aliasKey);
+      existingEndpoint.add(endpointKey);
+      imported += 1;
+    }
+
+    if (append.length === 0) {
+      await message("No new hosts were imported. Selected hosts may already exist.", {
+        title: "SSH Config Import",
+        kind: "info",
+      });
+      return;
+    }
+
+    const nextHosts = [...hosts, ...append];
+    try {
+      await saveHostsToBackend(nextHosts);
+      setHosts(nextHosts);
+      setShowSshImportDialog(false);
+      await message(`Imported ${imported} host(s).${skipped > 0 ? ` Skipped ${skipped} duplicate(s).` : ""}`, {
+        title: "SSH Config Import",
+        kind: "info",
+      });
+    } catch (error) {
+      await message(`Failed to import hosts.\n\n${String(error)}`, {
+        title: "SSH Config Import",
+        kind: "error",
+      });
+    }
   }
 
   function openEditDialog(host: Host) {
@@ -272,6 +391,12 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
     persistHostOrder,
     openEditDialog,
     openAddDialog,
+    openSshImportDialog,
+    importSshConfigHosts,
+    showSshImportDialog,
+    setShowSshImportDialog,
+    sshImportCandidates,
+    sshImportLoading,
     selectIdentityFile,
     handleSave,
     deleteHost,

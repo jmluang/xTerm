@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MAX_SESSION_BUFFER_CHARS } from "@/hooks/terminal/types";
 import type { SessionRuntimeRefs, SetActiveSessionId, SetConnectingHosts, SetSessions, TerminalRefs } from "@/hooks/terminal/types";
+import { appendSessionBuffer } from "@/hooks/terminal/sessionBuffer";
+import { markFirstSessionOutput } from "@/lib/perfMetrics";
 
 type UsePtyEventsParams = {
   isInTauri: boolean;
@@ -38,6 +40,10 @@ export function usePtyEvents(params: UsePtyEventsParams) {
 
       if (!sessionHadAnyOutput.current.has(sessionId)) {
         sessionHadAnyOutput.current.add(sessionId);
+        markFirstSessionOutput();
+        setSessions((prev) =>
+          prev.map((session) => (session.id === sessionId && session.status === "starting" ? { ...session, status: "running" } : session))
+        );
         const timer = sessionConnectTimers.current.get(sessionId);
         if (timer) {
           window.clearTimeout(timer);
@@ -74,10 +80,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         }
       }
 
-      const prev = sessionBuffers.current.get(sessionId) ?? "";
-      let next = prev + data;
-      if (next.length > MAX_SESSION_BUFFER_CHARS) next = next.slice(next.length - MAX_SESSION_BUFFER_CHARS);
-      sessionBuffers.current.set(sessionId, next);
+      appendSessionBuffer(sessionBuffers.current, sessionId, data, MAX_SESSION_BUFFER_CHARS);
 
       if (terminalRefs.activeSessionIdRef.current === sessionId && terminalRefs.terminalInstance.current) {
         terminalRefs.terminalInstance.current.write(data);

@@ -8,7 +8,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { ArrowUpDown, Check, PanelLeftClose, Pencil, Search, Trash2, X } from "lucide-react";
+import { ArrowUpDown, Check, FileInput, PanelLeftClose, Pencil, Search, Trash2, X } from "lucide-react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,8 @@ export function HostsSidebar(props: {
   deleteHost: (host: Host) => Promise<void>;
   connectToHost: (host: Host) => Promise<void>;
   openAddDialog: () => void;
+  openSshImportDialog: () => Promise<void>;
+  sshImportLoading: boolean;
   isInTauri: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }) {
@@ -50,6 +52,8 @@ export function HostsSidebar(props: {
     deleteHost,
     connectToHost,
     openAddDialog,
+    openSshImportDialog,
+    sshImportLoading,
     isInTauri,
     setSidebarOpen,
   } = props;
@@ -134,6 +138,21 @@ export function HostsSidebar(props: {
           <PanelLeftClose size={18} />
         </button>
         <div className="flex-1" />
+        <button
+          type="button"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+          title="Import SSH Config"
+          aria-label="Import SSH Config"
+          onClick={(e) => {
+            e.stopPropagation();
+            void openSshImportDialog();
+          }}
+          disabled={sshImportLoading || !isInTauri}
+          data-tauri-drag-region="false"
+          style={{ WebkitAppRegion: "no-drag" } as any}
+        >
+          <FileInput size={18} />
+        </button>
         <button
           type="button"
           className={[
@@ -263,7 +282,14 @@ export function HostsSidebar(props: {
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <p className="text-sm text-muted-foreground mb-3">No hosts yet</p>
-              <Button onClick={openAddDialog}>Create Host</Button>
+              <div className="flex items-center gap-2">
+                <Button onClick={openAddDialog}>Create Host</Button>
+                {isInTauri ? (
+                  <Button variant="outline" onClick={() => void openSshImportDialog()} disabled={sshImportLoading}>
+                    Import SSH Config
+                  </Button>
+                ) : null}
+              </div>
             </div>
           )}
 
