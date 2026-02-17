@@ -91,7 +91,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
       const { session_id: sessionId, code: exitCode } = event.payload;
       const endedAt = Date.now();
       const reason = sessionCloseReason.current.get(sessionId) ?? "unknown";
-      const shouldKeepFailedTab = reason === "timeout" || (reason === "unknown" && exitCode !== 0);
+      const shouldKeepFailedTab = reason === "timeout" || (exitCode > 0);
 
       if (shouldKeepFailedTab) {
         setSessions((prev) =>
