@@ -282,7 +282,7 @@ export function HostsSidebar(props: {
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <p className="text-sm text-muted-foreground mb-3">No hosts yet</p>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-2 w-full max-w-[160px]">
                 <Button onClick={openAddDialog}>Create Host</Button>
                 {isInTauri ? (
                   <Button variant="outline" onClick={() => void openSshImportDialog()} disabled={sshImportLoading}>

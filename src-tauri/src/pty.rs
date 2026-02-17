@@ -77,6 +77,10 @@ pub async fn pty_spawn<R: Runtime>(
     if let Some(cwd) = cwd {
         cmd.cwd(OsString::from(cwd));
     }
+    // Ensure SSH always forwards a valid terminal type unless caller overrides it.
+    if !env.contains_key("TERM") {
+        cmd.env(OsString::from("TERM"), OsString::from("xterm-256color"));
+    }
     for (k, v) in env.iter() {
         cmd.env(OsString::from(k), OsString::from(v));
     }
