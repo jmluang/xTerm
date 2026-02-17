@@ -6,6 +6,7 @@ import { usePtyEvents } from "@/hooks/terminal/ptyEvents";
 import { useSessionActions } from "@/hooks/terminal/actions";
 import { useTerminalRuntime } from "@/hooks/terminal/runtime";
 import type { SessionRuntimeRefs, TerminalRefs } from "@/hooks/terminal/types";
+import type { SessionBuffer } from "@/hooks/terminal/sessionBuffer";
 import type { ThemeMode } from "@/lib/theme";
 import type { TerminalThemeId } from "@/lib/terminalTheme";
 import type { TerminalOptionsState } from "@/lib/terminalOptions";
@@ -32,7 +33,7 @@ export function useTerminalSessions(params: {
   const activeSessionIdRef = useRef<string | null>(null);
   const resizeDebounceTimer = useRef<number | null>(null);
 
-  const sessionBuffers = useRef(new Map<string, string>());
+  const sessionBuffers = useRef<Map<string, SessionBuffer>>(new Map());
   const sessionAutoPasswords = useRef(new Map<string, string>());
   const sessionPromptTails = useRef(new Map<string, string>());
   const sessionAutoPasswordSent = useRef(new Set<string>());

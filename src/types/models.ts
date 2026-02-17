@@ -24,7 +24,7 @@ export interface Session {
   hostId: string;
   startedAt: number;
   endedAt?: number;
-  status: "running" | "exited";
+  status: "starting" | "running" | "exited";
   exitCode?: number;
 }
 
@@ -33,4 +33,14 @@ export interface Settings {
   webdav_folder?: string | null;
   webdav_username?: string | null;
   webdav_password?: string | null;
+}
+
+export interface SshConfigImportCandidate {
+  alias: string;
+  hostname: string;
+  user: string;
+  port: number;
+  identityFile?: string;
+  proxyJump?: string;
+  sourcePath: string;
 }

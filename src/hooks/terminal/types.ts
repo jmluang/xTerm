@@ -2,6 +2,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import type { Session } from "@/types/models";
+import type { SessionBuffer } from "@/hooks/terminal/sessionBuffer";
 
 export type SessionCloseReason = "user" | "timeout" | "unknown";
 
@@ -33,7 +34,7 @@ export type TerminalRefs = {
 };
 
 export type SessionRuntimeRefs = {
-  sessionBuffers: MutableRefObject<Map<string, string>>;
+  sessionBuffers: MutableRefObject<Map<string, SessionBuffer>>;
   sessionAutoPasswords: MutableRefObject<Map<string, string>>;
   sessionPromptTails: MutableRefObject<Map<string, string>>;
   sessionAutoPasswordSent: MutableRefObject<Set<string>>;

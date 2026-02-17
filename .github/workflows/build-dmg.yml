@@ -1,0 +1,62 @@
+name: Build DMG
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-macos-dmg:
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app bundle
+        run: npm run tauri build
+
+      - name: Locate DMG
+        id: find_dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          if [[ -z "${DMG_PATH}" ]]; then
+            echo "No DMG found under src-tauri/target/release/bundle/dmg"
+            exit 1
+          fi
+          echo "dmg_path=${DMG_PATH}" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$(basename "${DMG_PATH}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtermius-dmg
+          path: ${{ steps.find_dmg.outputs.dmg_path }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release asset (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find_dmg.outputs.dmg_path }}
+          generate_release_notes: true

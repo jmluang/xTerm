@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "icons": "tauri icon ../icon.png",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bench:startup": "./scripts/bench_startup.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
