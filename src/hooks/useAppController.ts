@@ -12,17 +12,21 @@ import {
 } from "@/lib/terminalOptions";
 import {
   SETTINGS_NAVIGATE_EVENT,
+  SETTINGS_METRICS_DOCK_EVENT,
   SETTINGS_TERMINAL_OPTIONS_EVENT,
   SETTINGS_TERMINAL_THEME_EVENT,
   SETTINGS_THEME_MODE_EVENT,
+  type SettingsMetricsDockPayload,
   type SettingsNavigatePayload,
   type SettingsTerminalOptionsPayload,
   type SettingsTerminalThemePayload,
   type SettingsThemeModePayload,
 } from "@/lib/settingsEvents";
+import { getMetricsDockEnabled, setMetricsDockEnabled } from "@/lib/metricsDock";
 import { useHostsManager } from "@/hooks/useHostsManager";
 import { useTerminalSessions } from "@/hooks/useTerminalSessions";
 import { useWebdavSync } from "@/hooks/useWebdavSync";
+import { useHostInsights } from "@/hooks/useHostInsights";
 import type { SettingsSection } from "@/types/settings";
 
 const TERMINAL_THEME_IDS = new Set<string>(TERMINAL_THEME_OPTIONS.map((option) => option.id));
@@ -35,6 +39,7 @@ export function useAppController() {
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
   const [terminalThemeId, setTerminalThemeIdState] = useState<TerminalThemeId>(() => getTerminalThemeId());
   const [terminalOptions, setTerminalOptionsState] = useState<TerminalOptionsState>(() => getTerminalOptions());
+  const [metricsDockEnabled, setMetricsDockEnabledState] = useState<boolean>(() => getMetricsDockEnabled());
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem("xtermius_sidebar_open") !== "0");
   const [, setActiveDragHostId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -54,6 +59,12 @@ export function useAppController() {
     hostsRef: hostsMgr.hostsRef,
     loadHosts: hostsMgr.loadHosts,
   });
+  const hostInsights = useHostInsights({
+    isInTauri,
+    hosts: hostsMgr.hosts,
+    sessions: terminal.sessions,
+    activeSessionId: terminal.activeSessionId,
+  });
 
   useEffect(() => {
     void hostsMgr.loadHosts();
@@ -72,6 +83,10 @@ export function useAppController() {
   }, [terminalOptions]);
 
   useEffect(() => {
+    setMetricsDockEnabled(metricsDockEnabled);
+  }, [metricsDockEnabled]);
+
+  useEffect(() => {
     localStorage.setItem("xtermius_sidebar_open", sidebarOpen ? "1" : "0");
   }, [sidebarOpen]);
 
@@ -86,6 +101,7 @@ export function useAppController() {
     let unlistenThemeMode: (() => void) | null = null;
     let unlistenTerminalTheme: (() => void) | null = null;
     let unlistenTerminalOptions: (() => void) | null = null;
+    let unlistenMetricsDock: (() => void) | null = null;
 
     (async () => {
       try {
@@ -108,6 +124,11 @@ export function useAppController() {
           if (!options) return;
           setTerminalOptionsState(sanitizeTerminalOptions(options));
         });
+
+        unlistenMetricsDock = await listen<SettingsMetricsDockPayload>(SETTINGS_METRICS_DOCK_EVENT, (event) => {
+          const enabled = event.payload?.enabled;
+          if (typeof enabled === "boolean") setMetricsDockEnabledState(enabled);
+        });
       } catch (error) {
         console.debug("[settings-window] event listeners unavailable", error);
       }
@@ -126,6 +147,11 @@ export function useAppController() {
       }
       try {
         unlistenTerminalOptions?.();
+      } catch {
+        // ignore
+      }
+      try {
+        unlistenMetricsDock?.();
       } catch {
         // ignore
       }
@@ -213,6 +239,8 @@ export function useAppController() {
     setTerminalThemeIdState,
     terminalOptions,
     setTerminalOptionsState,
+    metricsDockEnabled,
+    setMetricsDockEnabledState,
     sidebarOpen,
     setSidebarOpen,
     sortedHosts: hostsMgr.sortedHosts,
@@ -228,6 +256,15 @@ export function useAppController() {
     setShowSshImportDialog: hostsMgr.setShowSshImportDialog,
     sshImportCandidates: hostsMgr.sshImportCandidates,
     sshImportLoading: hostsMgr.sshImportLoading,
+    hostStaticById: hostInsights.hostStaticById,
+    refreshingHostIds: hostInsights.refreshingHostIds,
+    refreshHostStatic: hostInsights.refreshHostStatic,
+    liveHost: hostInsights.liveHost,
+    liveInfo: hostInsights.liveInfo,
+    liveError: hostInsights.liveError,
+    liveLoading: hostInsights.liveLoading,
+    liveUpdatedAt: hostInsights.liveUpdatedAt,
+    liveHistory: hostInsights.liveHistory,
     selectIdentityFile: hostsMgr.selectIdentityFile,
     handleSave: hostsMgr.handleSave,
     closeSession: terminal.closeSession,

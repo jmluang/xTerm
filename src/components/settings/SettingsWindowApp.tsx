@@ -6,15 +6,18 @@ import { getThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme";
 import { getTerminalThemeId, setTerminalThemeId, type TerminalThemeId } from "@/lib/terminalTheme";
 import { getTerminalOptions, sanitizeTerminalOptions, setTerminalOptions, type TerminalOptionsState } from "@/lib/terminalOptions";
 import {
+  SETTINGS_METRICS_DOCK_EVENT,
   SETTINGS_NAVIGATE_EVENT,
   SETTINGS_TERMINAL_OPTIONS_EVENT,
   SETTINGS_TERMINAL_THEME_EVENT,
   SETTINGS_THEME_MODE_EVENT,
+  type SettingsMetricsDockPayload,
   type SettingsNavigatePayload,
   type SettingsTerminalOptionsPayload,
   type SettingsTerminalThemePayload,
   type SettingsThemeModePayload,
 } from "@/lib/settingsEvents";
+import { getMetricsDockEnabled, setMetricsDockEnabled } from "@/lib/metricsDock";
 import { useWebdavSync } from "@/hooks/useWebdavSync";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import type { Host } from "@/types/models";
@@ -34,6 +37,7 @@ export function SettingsWindowApp() {
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
   const [terminalThemeId, setTerminalThemeIdState] = useState<TerminalThemeId>(() => getTerminalThemeId());
   const [terminalOptions, setTerminalOptionsState] = useState<TerminalOptionsState>(() => getTerminalOptions());
+  const [metricsDockEnabled, setMetricsDockEnabledState] = useState<boolean>(() => getMetricsDockEnabled());
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => readInitialSection());
 
   const hostsRef = useRef<Host[]>([]);
@@ -75,6 +79,11 @@ export function SettingsWindowApp() {
     setTerminalOptions(safe);
     emitToMain<SettingsTerminalOptionsPayload>(SETTINGS_TERMINAL_OPTIONS_EVENT, { options: safe });
   }, [terminalOptions, isInTauri]);
+
+  useEffect(() => {
+    setMetricsDockEnabled(metricsDockEnabled);
+    emitToMain<SettingsMetricsDockPayload>(SETTINGS_METRICS_DOCK_EVENT, { enabled: metricsDockEnabled });
+  }, [metricsDockEnabled, isInTauri]);
 
   useEffect(() => {
     if (!isInTauri) return;
@@ -122,6 +131,8 @@ export function SettingsWindowApp() {
         setTerminalThemeId={setTerminalThemeIdState}
         terminalOptions={terminalOptions}
         setTerminalOptions={setTerminalOptionsState}
+        metricsDockEnabled={metricsDockEnabled}
+        setMetricsDockEnabled={setMetricsDockEnabledState}
         settings={webdav.settings}
         setSettings={webdav.setSettings}
         localHostsDbPath={webdav.localHostsDbPath}
