@@ -34,11 +34,29 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Derive release version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Release tag: ${TAG}"
+          echo "Release version: ${VERSION}"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
+
+      - name: Sync app versions from tag
+        if: env.RELEASE_VERSION != ''
+        run: |
+          node -e "const fs=require('fs'); const p='package.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
+          node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
+          node -e 'const fs=require("fs"); const p="src-tauri/Cargo.toml"; let s=fs.readFileSync(p,"utf8"); s=s.replace(/(^version\\s*=\\s*")[^"]+("\\s*$)/m, "$1"+process.env.RELEASE_VERSION+"$2"); fs.writeFileSync(p, s);'
+          echo "Version files synchronized to ${RELEASE_VERSION}"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
