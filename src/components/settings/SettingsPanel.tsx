@@ -49,6 +49,8 @@ export function SettingsPanel(props: {
   setTerminalThemeId: (themeId: TerminalThemeId) => void;
   terminalOptions: TerminalOptionsState;
   setTerminalOptions: Dispatch<SetStateAction<TerminalOptionsState>>;
+  metricsDockEnabled: boolean;
+  setMetricsDockEnabled: Dispatch<SetStateAction<boolean>>;
   settings: Settings;
   setSettings: Dispatch<SetStateAction<Settings>>;
   localHostsDbPath: string;
@@ -69,6 +71,8 @@ export function SettingsPanel(props: {
     setTerminalThemeId,
     terminalOptions,
     setTerminalOptions,
+    metricsDockEnabled,
+    setMetricsDockEnabled,
     settings,
     setSettings,
     localHostsDbPath,
@@ -302,6 +306,17 @@ export function SettingsPanel(props: {
                         checked={terminalOptions.drawBoldTextInBrightColors}
                         onChange={(next) => patchTerminalOptions({ drawBoldTextInBrightColors: next })}
                         ariaLabel="Toggle bright bold text"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm">Host Metrics Dock</div>
+                        <div className="text-xs text-muted-foreground">Show CPU/MEM/Load panel under terminal</div>
+                      </div>
+                      <Toggle
+                        checked={metricsDockEnabled}
+                        onChange={(next) => setMetricsDockEnabled(next)}
+                        ariaLabel="Toggle host metrics dock"
                       />
                     </div>
 

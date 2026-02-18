@@ -8,12 +8,12 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { ArrowUpDown, Check, FileInput, PanelLeftClose, Pencil, Search, Trash2, X } from "lucide-react";
+import { ArrowUpDown, Check, FileInput, PanelLeftClose, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SortableHostRow } from "@/components/hosts/SortableHostRow";
-import type { Host } from "@/types/models";
+import type { Host, HostStaticInfo } from "@/types/models";
 
 export function HostsSidebar(props: {
   hostListRef: RefObject<HTMLDivElement>;
@@ -27,6 +27,9 @@ export function HostsSidebar(props: {
   hosts: Host[];
   persistHostOrder: (nextHosts: Host[]) => Promise<void>;
   connectingHosts: Record<string, { stage: string; startedAt: number; count: number }>;
+  hostStaticById: Record<string, { info?: HostStaticInfo; updatedAt?: number }>;
+  refreshingHostIds: Record<string, boolean>;
+  refreshHostStatic: (host: Host) => Promise<void>;
   openEditDialog: (host: Host) => void;
   deleteHost: (host: Host) => Promise<void>;
   connectToHost: (host: Host) => Promise<void>;
@@ -48,6 +51,9 @@ export function HostsSidebar(props: {
     hosts,
     persistHostOrder,
     connectingHosts,
+    hostStaticById,
+    refreshingHostIds,
+    refreshHostStatic,
     openEditDialog,
     deleteHost,
     connectToHost,
@@ -60,16 +66,71 @@ export function HostsSidebar(props: {
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  function formatMem(kb?: number) {
+    if (!kb || kb <= 0) return "";
+    const gb = kb / 1024 / 1024;
+    if (gb >= 1) return `${gb.toFixed(1)}G`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(0)}M`;
+  }
+
+  function getOsLabel(systemName?: string) {
+    const raw = (systemName || "").trim();
+    if (!raw) return "";
+    const lower = raw.toLowerCase();
+    if (lower.includes("debian")) return "Debian";
+    if (lower.includes("ubuntu")) return "Ubuntu";
+    if (lower.includes("centos")) return "CentOS";
+    if (lower.includes("red hat") || lower.includes("rhel")) return "RHEL";
+    if (lower.includes("fedora")) return "Fedora";
+    if (lower.includes("alpine")) return "Alpine";
+    if (lower.includes("arch")) return "Arch";
+    if (lower.includes("macos") || lower.includes("darwin")) return "macOS";
+    if (lower.includes("windows")) return "Windows";
+    return raw.split(/[ /-]+/).filter(Boolean)[0] || raw;
+  }
+
   function renderHostMeta(host: Host) {
+    const state = hostStaticById[host.id];
+    const staticInfo = state?.info;
+    const osLabel = getOsLabel(staticInfo?.systemName);
+    const mem = formatMem(staticInfo?.memTotalKb);
+    const specLabel =
+      staticInfo?.cpuCores && mem
+        ? `${staticInfo.cpuCores}C · ${mem}`
+        : staticInfo?.cpuCores
+          ? `${staticInfo.cpuCores}C`
+          : mem
+            ? `RAM ${mem}`
+            : "";
+    const endpoint = `${host.hostname}${host.port && host.port !== 22 ? `:${host.port}` : ""}`;
     return (
       <>
-        <div className="text-sm font-semibold break-words leading-snug" title={host.alias || host.hostname || "Unnamed"}>
-          {host.alias || host.hostname || "Unnamed"}
+        <div className="flex items-center gap-1.5 min-w-0 min-h-7 leading-none">
+          <div className="text-sm font-semibold truncate" title={host.alias || host.hostname || "Unnamed"}>
+            {host.alias || host.hostname || "Unnamed"}
+          </div>
+          {osLabel ? (
+            <span
+              title={staticInfo?.systemName || osLabel}
+              className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border bg-muted/60 text-muted-foreground border-border/60"
+            >
+              {osLabel}
+            </span>
+          ) : null}
         </div>
-        <div className="text-[11px] text-muted-foreground break-words leading-snug">
-          {host.user ? `${host.user}@` : ""}
-          {host.hostname}
-          {host.port && host.port !== 22 ? `:${host.port}` : ""}
+        <div className="mt-[5px] flex items-center justify-between gap-2 min-w-0">
+          <div className="text-[11px] text-muted-foreground truncate" title={endpoint}>
+            {endpoint}
+          </div>
+          {specLabel ? (
+            <span
+              title={`CPU Cores + RAM (${specLabel})`}
+              className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border bg-muted/60 text-muted-foreground border-border/60"
+            >
+              {specLabel}
+            </span>
+          ) : null}
         </div>
         {connectingHosts[host.id] ? (
           <div className="text-[11px] text-muted-foreground mt-1">
@@ -102,6 +163,19 @@ export function HostsSidebar(props: {
           aria-label="Edit host"
         >
           <Pencil size={16} />
+        </button>
+        <button
+          type="button"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto bg-background/70 backdrop-blur ring-1 ring-black/5"
+          onClick={(e) => {
+            e.stopPropagation();
+            void refreshHostStatic(host);
+          }}
+          title="Refresh Host Info"
+          aria-label="Refresh host info"
+          disabled={!!refreshingHostIds[host.id]}
+        >
+          <RefreshCw size={16} className={refreshingHostIds[host.id] ? "animate-spin" : ""} />
         </button>
         <button
           type="button"
@@ -255,7 +329,7 @@ export function HostsSidebar(props: {
                 <div
                   key={host.id}
                   className={[
-                    "relative px-3 py-2 rounded-lg mb-1 group",
+                    "relative px-3 py-[10px] rounded-lg mb-1 group",
                     reorderMode ? "cursor-default" : "cursor-pointer hover:bg-muted",
                   ].join(" ")}
                   onClick={() => {

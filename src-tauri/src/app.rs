@@ -12,6 +12,8 @@ pub fn run() {
             crate::ssh_import::ssh_config_scan_importable_hosts,
             crate::host_store::settings_load,
             crate::host_store::settings_save,
+            crate::host_probe::host_probe_static,
+            crate::host_probe::host_probe_live,
             crate::webdav_sync::webdav_pull,
             crate::webdav_sync::webdav_push,
             crate::credential_store::host_password_get,

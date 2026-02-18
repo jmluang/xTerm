@@ -5,6 +5,7 @@ import { HostsSidebar } from "@/components/layout/HostsSidebar";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { SettingsWindowApp } from "@/components/settings/SettingsWindowApp";
 import { MainPane } from "@/components/layout/MainPane";
+import { ToastViewport } from "@/components/ui/ToastViewport";
 import { useAppController } from "@/hooks/useAppController";
 
 function App() {
@@ -29,6 +30,9 @@ function App() {
             hosts={ctrl.hosts}
             persistHostOrder={ctrl.persistHostOrder}
             connectingHosts={ctrl.connectingHosts}
+            hostStaticById={ctrl.hostStaticById}
+            refreshingHostIds={ctrl.refreshingHostIds}
+            refreshHostStatic={ctrl.refreshHostStatic}
             openEditDialog={ctrl.openEditDialog}
             deleteHost={ctrl.deleteHost}
             connectToHost={ctrl.connectToHost}
@@ -62,6 +66,13 @@ function App() {
             if (ctrl.activeSessionId) ctrl.terminalInstance.current?.focus();
           }}
           hostHintText={ctrl.sidebarOpen ? "Or click a host from the sidebar" : "Show Hosts from the toolbar"}
+          liveHost={ctrl.liveHost}
+          liveInfo={ctrl.liveInfo}
+          liveError={ctrl.liveError}
+          liveLoading={ctrl.liveLoading}
+          liveUpdatedAt={ctrl.liveUpdatedAt}
+          liveHistory={ctrl.liveHistory}
+          metricsDockEnabled={ctrl.metricsDockEnabled}
         >
           <HostEditorDialog
             open={ctrl.showDialog}
@@ -94,6 +105,8 @@ function App() {
           setTerminalThemeId={ctrl.setTerminalThemeIdState}
           terminalOptions={ctrl.terminalOptions}
           setTerminalOptions={ctrl.setTerminalOptionsState}
+          metricsDockEnabled={ctrl.metricsDockEnabled}
+          setMetricsDockEnabled={ctrl.setMetricsDockEnabledState}
           settings={ctrl.settings}
           setSettings={ctrl.setSettings}
           localHostsDbPath={ctrl.localHostsDbPath}
@@ -105,6 +118,7 @@ function App() {
           onPush={ctrl.doWebdavPush}
         />
       ) : null}
+      <ToastViewport />
     </div>
   );
 }

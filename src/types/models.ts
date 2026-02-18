@@ -18,6 +18,41 @@ export interface Host {
   deleted: boolean;
 }
 
+export interface HostStaticInfo {
+  systemName?: string;
+  kernel?: string;
+  arch?: string;
+  cpuModel?: string;
+  cpuCores?: number;
+  memTotalKb?: number;
+}
+
+export interface HostLiveProcess {
+  command: string;
+  cpuPercent: number;
+  memPercent: number;
+}
+
+export interface HostLiveInfo {
+  cpuPercent?: number;
+  cpuUserPercent?: number;
+  cpuSystemPercent?: number;
+  cpuIowaitPercent?: number;
+  cpuIdlePercent?: number;
+  cpuCores?: number;
+  uptimeSeconds?: number;
+  memTotalKb?: number;
+  memUsedKb?: number;
+  memFreeKb?: number;
+  memPageCacheKb?: number;
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  diskRootTotalKb?: number;
+  diskRootUsedKb?: number;
+  processes: HostLiveProcess[];
+}
+
 export interface Session {
   id: string;
   hostAlias: string;
