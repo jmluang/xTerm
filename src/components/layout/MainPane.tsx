@@ -63,7 +63,11 @@ export function MainPane(props: {
           </button>
         ) : null}
 
-        <div className="min-w-0 flex items-center gap-2 flex-1">
+        <div
+          className="min-w-0 flex items-center gap-2 flex-1 h-full"
+          data-tauri-drag-region
+          style={{ WebkitAppRegion: "drag" } as any}
+        >
           {sessions.length > 0 ? (
             <div className="flex items-center gap-1 overflow-x-auto h-full max-w-[min(720px,60vw)]">
               {sessions.map((session) => {
@@ -117,18 +121,18 @@ export function MainPane(props: {
               })}
             </div>
           ) : (
-            <div className="h-full flex items-center px-2 text-sm font-semibold leading-none text-muted-foreground/80">
+            <div className="h-full flex items-center px-2 text-sm font-semibold leading-none text-muted-foreground/80 cursor-default">
               xTermius
             </div>
           )}
 
-          <div className="flex-1" />
+          <div className="flex-1 h-full" data-tauri-drag-region style={{ WebkitAppRegion: "drag" } as any} />
         </div>
 
         <div
           className="ml-auto flex items-center gap-1"
-          data-tauri-drag-region="false"
-          style={{ WebkitAppRegion: "no-drag" } as any}
+          data-tauri-drag-region
+          style={{ WebkitAppRegion: "drag" } as any}
         >
           <button
             type="button"
@@ -136,6 +140,8 @@ export function MainPane(props: {
             onClick={onOpenSyncSettings}
             title="WebDAV Sync"
             aria-label="WebDAV Sync"
+            data-tauri-drag-region="false"
+            style={{ WebkitAppRegion: "no-drag" } as any}
           >
             <Cloud size={18} />
           </button>
@@ -145,6 +151,8 @@ export function MainPane(props: {
             onClick={onOpenSettings}
             title="Settings"
             aria-label="Settings"
+            data-tauri-drag-region="false"
+            style={{ WebkitAppRegion: "no-drag" } as any}
           >
             <Settings2 size={18} />
           </button>
@@ -154,6 +162,8 @@ export function MainPane(props: {
             onClick={openAddDialog}
             title="Add Host"
             aria-label="Add Host"
+            data-tauri-drag-region="false"
+            style={{ WebkitAppRegion: "no-drag" } as any}
           >
             <Plus size={18} />
           </button>
