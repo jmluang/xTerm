@@ -25,7 +25,9 @@ export function SortableHostRow(props: {
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={[
         "relative px-3 py-2 rounded-lg mb-1 group select-none",
-        reorderMode ? "cursor-grab active:cursor-grabbing bg-black/5 hover:bg-black/10" : "cursor-pointer hover:bg-muted",
+        reorderMode
+          ? "cursor-grab active:cursor-grabbing bg-black/5 hover:bg-black/10"
+          : "cursor-pointer hover:bg-[var(--app-sidebar-row-hover)]",
         isDragging ? "opacity-70" : "",
       ].join(" ")}
       onClick={onRowClick}

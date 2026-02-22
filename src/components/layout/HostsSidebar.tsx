@@ -39,6 +39,8 @@ export function HostsSidebar(props: {
   isInTauri: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }) {
+  const nativeVibrancyActive =
+    typeof document !== "undefined" && document.documentElement.dataset.nativeVibrancy === "1";
   const {
     hostListRef,
     hostListScrollable,
@@ -115,6 +117,7 @@ export function HostsSidebar(props: {
             <span
               title={staticInfo?.systemName || osLabel}
               className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border bg-muted/60 text-muted-foreground border-border/60"
+              style={{ background: "var(--app-sidebar-chip-bg)" } as any}
             >
               {osLabel}
             </span>
@@ -128,6 +131,7 @@ export function HostsSidebar(props: {
             <span
               title={`CPU Cores + RAM (${specLabel})`}
               className="shrink-0 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium border bg-muted/60 text-muted-foreground border-border/60"
+              style={{ background: "var(--app-sidebar-chip-bg)" } as any}
             >
               {specLabel}
             </span>
@@ -155,7 +159,14 @@ export function HostsSidebar(props: {
       <>
         <button
           type="button"
-          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto bg-background/70 backdrop-blur ring-1 ring-black/5"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"
+          style={
+            {
+              background: "var(--app-sidebar-action-bg)",
+              backdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+              WebkitBackdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+            } as any
+          }
           onClick={(e) => {
             e.stopPropagation();
             openEditDialog(host);
@@ -167,7 +178,14 @@ export function HostsSidebar(props: {
         </button>
         <button
           type="button"
-          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto bg-background/70 backdrop-blur ring-1 ring-black/5"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"
+          style={
+            {
+              background: "var(--app-sidebar-action-bg)",
+              backdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+              WebkitBackdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+            } as any
+          }
           onClick={(e) => {
             e.stopPropagation();
             void refreshHostStatic(host);
@@ -180,7 +198,14 @@ export function HostsSidebar(props: {
         </button>
         <button
           type="button"
-          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto bg-background/70 backdrop-blur ring-1 ring-black/5"
+          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"
+          style={
+            {
+              background: "var(--app-sidebar-action-bg)",
+              backdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+              WebkitBackdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+            } as any
+          }
           onClick={(e) => {
             e.stopPropagation();
             void deleteHost(host);
@@ -195,7 +220,16 @@ export function HostsSidebar(props: {
   }
 
   return (
-    <div className="min-w-0 min-h-0 flex flex-col" style={{ background: "var(--app-sidebar-bg)" } as any}>
+    <div
+      className="min-w-0 min-h-0 flex flex-col"
+      style={
+        {
+          background: nativeVibrancyActive ? "var(--app-sidebar-bg-native)" : "var(--app-sidebar-bg)",
+          backdropFilter: nativeVibrancyActive ? "none" : "saturate(1.35) blur(18px)",
+          WebkitBackdropFilter: nativeVibrancyActive ? "none" : "saturate(1.35) blur(18px)",
+        } as any
+      }
+    >
       <div
         data-tauri-drag-region
         className="h-[44px] pt-[4px] pb-0 flex items-center gap-2 pl-[88px] pr-2"
@@ -252,7 +286,14 @@ export function HostsSidebar(props: {
       <aside className="flex-1 min-h-0 overflow-hidden">
         <div ref={hostListRef} className="h-full overflow-auto px-2 pt-0 pb-1">
           {hostListScrollable || hostSearch.trim() ? (
-            <div className="sticky top-0 z-20 -mx-2 px-2 pt-1 pb-1" style={{ background: "var(--app-sidebar-bg)" } as any}>
+            <div
+              className="sticky top-0 z-20 -mx-2 px-2 pt-1 pb-1"
+              style={
+                {
+                  background: nativeVibrancyActive ? "var(--app-sidebar-sticky-bg-native)" : "var(--app-sidebar-sticky-bg)",
+                } as any
+              }
+            >
               <div className="px-1">
                 <div className="relative">
                   <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-foreground/70" />
@@ -333,7 +374,7 @@ export function HostsSidebar(props: {
                   key={host.id}
                   className={[
                     "relative px-3 py-[10px] rounded-lg mb-1 group",
-                    reorderMode ? "cursor-default" : "cursor-pointer hover:bg-muted",
+                    reorderMode ? "cursor-default" : "cursor-pointer hover:bg-[var(--app-sidebar-row-hover)]",
                   ].join(" ")}
                   onClick={() => {
                     if (reorderMode) return;

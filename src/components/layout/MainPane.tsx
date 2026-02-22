@@ -270,14 +270,17 @@ export function MainPane(props: {
     <div
       className={[
         "min-w-0 min-h-0 flex flex-col",
-        sidebarOpen ? "rounded-l-2xl overflow-hidden" : "",
+        sidebarOpen ? "rounded-l-xl overflow-hidden" : "",
       ].join(" ")}
       style={
         {
           background: sidebarOpen
             ? "var(--app-mainpane-bg)"
             : "var(--app-bg)",
-          boxShadow: sidebarOpen ? "var(--app-mainpane-shadow)" : "none",
+          boxShadow: "none",
+          isolation: "isolate",
+          WebkitBackdropFilter: "none",
+          backdropFilter: "none",
         } as any
       }
     >
