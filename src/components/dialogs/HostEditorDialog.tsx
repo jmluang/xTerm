@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Host } from "@/types/models";
@@ -14,6 +14,7 @@ export function HostEditorDialog(props: {
   onSave: () => Promise<void>;
 }) {
   const { open, onClose, editingHost, formData, setFormData, selectIdentityFile, onSave } = props;
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   if (!open) return null;
 
   return (
@@ -157,9 +158,86 @@ export function HostEditorDialog(props: {
                 </div>
               </div>
 
-              <details className="rounded-xl border border-border bg-card/40 p-4">
-                <summary className="cursor-pointer select-none text-sm font-semibold">Advanced</summary>
-                <div className="grid gap-4 mt-4">
+              <div className="rounded-xl border border-border bg-card/40 p-4">
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between gap-2 text-left"
+                  onClick={() => setAdvancedOpen((v) => !v)}
+                  aria-expanded={advancedOpen}
+                >
+                  <span className="select-none text-sm font-semibold">Advanced</span>
+                  <ChevronDown
+                    size={16}
+                    className={["text-muted-foreground transition-transform", advancedOpen ? "rotate-180" : ""].join(" ")}
+                    aria-hidden="true"
+                  />
+                </button>
+                {advancedOpen ? <div className="grid gap-4 mt-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card/40 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">Host Insights</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Auto-detect OS / CPU / RAM info for this host
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.hostInsightsEnabled !== false}
+                        onClick={() =>
+                          setFormData({ ...formData, hostInsightsEnabled: !(formData.hostInsightsEnabled !== false) })
+                        }
+                        className={[
+                          "h-7 w-12 rounded-full transition-colors inline-flex items-center px-1 shrink-0",
+                          formData.hostInsightsEnabled !== false ? "bg-sky-500/80" : "bg-muted",
+                        ].join(" ")}
+                        title={formData.hostInsightsEnabled !== false ? "Disable host insights" : "Enable host insights"}
+                      >
+                        <span
+                          className={[
+                            "h-5 w-5 rounded-full bg-white transition-transform shadow-sm",
+                            formData.hostInsightsEnabled !== false ? "translate-x-5" : "translate-x-0",
+                          ].join(" ")}
+                        />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card/40 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">Live Metrics Panel</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Show and poll the live panel below terminal for this host
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.hostLiveMetricsEnabled !== false}
+                        onClick={() =>
+                          setFormData({
+                            ...formData,
+                            hostLiveMetricsEnabled: !(formData.hostLiveMetricsEnabled !== false),
+                          })
+                        }
+                        className={[
+                          "h-7 w-12 rounded-full transition-colors inline-flex items-center px-1 shrink-0",
+                          formData.hostLiveMetricsEnabled !== false ? "bg-sky-500/80" : "bg-muted",
+                        ].join(" ")}
+                        title={
+                          formData.hostLiveMetricsEnabled !== false
+                            ? "Disable live metrics panel"
+                            : "Enable live metrics panel"
+                        }
+                      >
+                        <span
+                          className={[
+                            "h-5 w-5 rounded-full bg-white transition-transform shadow-sm",
+                            formData.hostLiveMetricsEnabled !== false ? "translate-x-5" : "translate-x-0",
+                          ].join(" ")}
+                        />
+                      </button>
+                    </div>
+                  </div>
                   <div className="grid gap-2">
                     <label className="text-sm font-medium">Environment Variables</label>
                     <Input
@@ -199,8 +277,8 @@ export function HostEditorDialog(props: {
                       placeholder="Optional"
                     />
                   </div>
-                </div>
-              </details>
+                </div> : null}
+              </div>
             </div>
 
             <div className="px-5 py-4 border-t border-border flex items-center justify-end gap-2">

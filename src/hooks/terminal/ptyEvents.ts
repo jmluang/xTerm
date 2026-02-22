@@ -83,7 +83,11 @@ export function usePtyEvents(params: UsePtyEventsParams) {
       appendSessionBuffer(sessionBuffers.current, sessionId, data, MAX_SESSION_BUFFER_CHARS);
 
       if (terminalRefs.activeSessionIdRef.current === sessionId && terminalRefs.terminalInstance.current) {
-        terminalRefs.terminalInstance.current.write(data);
+        try {
+          terminalRefs.terminalInstance.current.write(data);
+        } catch (error) {
+          console.debug("[xterm] write skipped (pty:data)", error);
+        }
       }
     });
 

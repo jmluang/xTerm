@@ -94,8 +94,9 @@ export function HostsSidebar(props: {
   }
 
   function renderHostMeta(host: Host) {
+    const insightsEnabled = host.hostInsightsEnabled !== false;
     const state = hostStaticById[host.id];
-    const staticInfo = state?.info;
+    const staticInfo = insightsEnabled ? state?.info : undefined;
     const osLabel = getOsLabel(staticInfo?.systemName);
     const mem = formatMem(staticInfo?.memTotalKb);
     const specLabel =
@@ -137,7 +138,7 @@ export function HostsSidebar(props: {
             </span>
           ) : null}
         </div>
-        {connectingHosts[host.id] ? (
+        {insightsEnabled && connectingHosts[host.id] ? (
           <div className="text-[11px] text-muted-foreground mt-1">
             {connectingHosts[host.id]?.count > 1 ? (
               <>Connecting · {connectingHosts[host.id]?.count}</>
@@ -155,6 +156,7 @@ export function HostsSidebar(props: {
   }
 
   function renderHostActions(host: Host) {
+    const insightsEnabled = host.hostInsightsEnabled !== false;
     return (
       <>
         <button
@@ -176,26 +178,28 @@ export function HostsSidebar(props: {
         >
           <Pencil size={16} />
         </button>
-        <button
-          type="button"
-          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"
-          style={
-            {
-              background: "var(--app-sidebar-action-bg)",
-              backdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
-              WebkitBackdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
-            } as any
-          }
-          onClick={(e) => {
-            e.stopPropagation();
-            void refreshHostStatic(host);
-          }}
-          title="Refresh Host Info"
-          aria-label="Refresh host info"
-          disabled={!!refreshingHostIds[host.id]}
-        >
-          <RefreshCw size={16} className={refreshingHostIds[host.id] ? "animate-spin" : ""} />
-        </button>
+        {insightsEnabled ? (
+          <button
+            type="button"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"
+            style={
+              {
+                background: "var(--app-sidebar-action-bg)",
+                backdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+                WebkitBackdropFilter: nativeVibrancyActive ? "none" : "blur(8px)",
+              } as any
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              void refreshHostStatic(host);
+            }}
+            title="Refresh Host Info"
+            aria-label="Refresh host info"
+            disabled={!!refreshingHostIds[host.id]}
+          >
+            <RefreshCw size={16} className={refreshingHostIds[host.id] ? "animate-spin" : ""} />
+          </button>
+        ) : null}
         <button
           type="button"
           className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center pointer-events-auto ring-1 ring-black/5"

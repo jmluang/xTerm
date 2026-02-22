@@ -54,6 +54,7 @@
         window.addEventListener('error', function (e) {
           var el = document.getElementById('root');
           if (!el) return;
+          if (!el.querySelector('.boot')) return;
           var msg = (e && (e.message || (e.error && e.error.message))) || 'Unknown error';
           el.innerHTML =
             '<div class="boot" style="color:#fecaca">Boot error: ' +
@@ -63,6 +64,7 @@
         window.addEventListener('unhandledrejection', function (e) {
           var el = document.getElementById('root');
           if (!el) return;
+          if (!el.querySelector('.boot')) return;
           var reason = e && e.reason;
           var msg = (reason && reason.message) ? reason.message : String(reason);
           el.innerHTML =

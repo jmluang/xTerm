@@ -193,7 +193,13 @@ export function useSessionActions(params: UseSessionActionsParams) {
         { id: sessionId.toString(), hostAlias: host.alias, hostId: host.id, startedAt, status: "starting" },
       ]);
       setActiveSessionId(sessionId.toString());
-      requestAnimationFrame(() => terminalRefs.terminalInstance.current?.focus());
+      requestAnimationFrame(() => {
+        try {
+          terminalRefs.terminalInstance.current?.focus();
+        } catch (error) {
+          console.debug("[xterm] focus skipped after connect", error);
+        }
+      });
     } catch (error) {
       console.error("Failed to connect:", error);
       alert(`Failed to connect: ${error}`);

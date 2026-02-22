@@ -45,6 +45,7 @@ export function MainPane(props: {
     hasSession,
     onTerminalMouseDown,
     hostHintText,
+    liveHost,
     liveInfo,
     liveError,
     liveLoading,
@@ -447,7 +448,7 @@ export function MainPane(props: {
             {children}
           </div>
 
-          {activeSessionId && metricsDockEnabled ? (
+          {activeSessionId && metricsDockEnabled && !!liveHost && liveHost.hostLiveMetricsEnabled !== false ? (
             <div className="rounded-xl border border-border/60 bg-background/78 backdrop-blur px-3 py-2">
               {metricsMode === "minimal" ? (
                 <div className="flex items-center gap-3 text-[11px] min-w-0">
