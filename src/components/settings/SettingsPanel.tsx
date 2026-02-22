@@ -12,7 +12,7 @@ import {
   type TerminalOptionsState,
 } from "@/lib/terminalOptions";
 import type { ThemeMode } from "@/lib/theme";
-import type { Settings } from "@/types/models";
+import type { Settings, SshConfigImportCandidate } from "@/types/models";
 import type { SettingsSection } from "@/types/settings";
 
 function Toggle(props: { checked: boolean; onChange: (next: boolean) => void; ariaLabel: string }) {
@@ -60,6 +60,11 @@ export function SettingsPanel(props: {
   onSaveSettings: () => Promise<void>;
   onPull: () => Promise<void>;
   onPush: () => Promise<void>;
+  onRefreshSshImport?: () => Promise<void> | void;
+  onImportSshConfigSelected?: (aliases: string[]) => Promise<void> | void;
+  sshImportBusy?: boolean;
+  sshImportLoading?: boolean;
+  sshImportCandidates?: SshConfigImportCandidate[];
 }) {
   const {
     open,
@@ -82,14 +87,31 @@ export function SettingsPanel(props: {
     onSaveSettings,
     onPull,
     onPush,
+    onRefreshSshImport,
+    onImportSshConfigSelected,
+    sshImportBusy = false,
+    sshImportLoading = false,
+    sshImportCandidates = [],
   } = props;
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+  const [selectedImportAliases, setSelectedImportAliases] = useState<Set<string>>(new Set());
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 
   useEffect(() => {
     if (!open) return;
     setActiveSection(initialSection);
   }, [open, initialSection]);
+
+  useEffect(() => {
+    if (activeSection !== "import") return;
+    if (!isInTauri) return;
+    if (sshImportCandidates.length > 0 || sshImportLoading) return;
+    void onRefreshSshImport?.();
+  }, [activeSection, isInTauri, sshImportCandidates.length, sshImportLoading, onRefreshSshImport]);
+
+  useEffect(() => {
+    setSelectedImportAliases(new Set(sshImportCandidates.map((item) => item.alias)));
+  }, [sshImportCandidates]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,8 +166,8 @@ export function SettingsPanel(props: {
             <div className="grid gap-1">
               {[
                 { id: "terminal", label: "Terminal" },
-                { id: "appearance", label: "Appearance" },
                 { id: "sync", label: "Sync" },
+                { id: "import", label: "Import SSH Config" },
               ].map((section) => (
                 <button
                   key={section.id}
@@ -168,10 +190,48 @@ export function SettingsPanel(props: {
             {activeSection === "terminal" ? (
               <div className="mx-auto max-w-4xl grid gap-4">
                 <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
-                  <div className="text-lg font-semibold">Terminal Settings</div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-lg font-semibold">Terminal Settings</div>
+                      <div className="text-xs text-muted-foreground mt-1">All terminal settings are saved locally.</div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => setTerminalOptions(DEFAULT_TERMINAL_OPTIONS)}
+                    >
+                      Reset Defaults
+                    </Button>
+                  </div>
+                </div>
 
+                <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
+                  <div className="text-sm font-medium">App Theme</div>
                   <div className="grid gap-2">
-                    <div className="text-sm font-medium">Theme Presets</div>
+                    <div className="flex rounded-lg border border-border bg-card p-1 max-w-sm">
+                      {(["system", "light", "dark"] as ThemeMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={[
+                            "flex-1 h-8 rounded-md text-sm",
+                            themeMode === mode
+                              ? "bg-accent text-foreground"
+                              : "text-muted-foreground hover:text-foreground",
+                          ].join(" ")}
+                          onClick={() => setThemeMode(mode)}
+                        >
+                          {mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
+                  <div className="text-sm font-medium">Theme Presets</div>
+                  <div className="grid gap-2">
                     <div className="flex flex-wrap gap-2">
                       {TERMINAL_THEME_OPTIONS.map((option) => (
                         <button
@@ -377,39 +437,6 @@ export function SettingsPanel(props: {
                     </div>
                   </div>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="text-xs text-muted-foreground">All terminal settings are saved locally.</div>
-                  <Button type="button" variant="outline" onClick={() => setTerminalOptions(DEFAULT_TERMINAL_OPTIONS)}>
-                    Reset Defaults
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {activeSection === "appearance" ? (
-              <div className="mx-auto max-w-4xl rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
-                <div className="text-lg font-semibold">Appearance</div>
-                <div className="grid gap-2">
-                  <div className="text-sm font-medium">App Theme</div>
-                  <div className="flex rounded-lg border border-border bg-card p-1 max-w-sm">
-                    {(["system", "light", "dark"] as ThemeMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={[
-                          "flex-1 h-8 rounded-md text-sm",
-                          themeMode === mode
-                            ? "bg-accent text-foreground"
-                            : "text-muted-foreground hover:text-foreground",
-                        ].join(" ")}
-                        onClick={() => setThemeMode(mode)}
-                      >
-                        {mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
               </div>
             ) : null}
 
@@ -502,10 +529,127 @@ export function SettingsPanel(props: {
                     onClick={() => {
                       void onPush();
                     }}
+                    >
+                      Push
+                    </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {activeSection === "import" ? (
+              <div className="mx-auto max-w-4xl rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold">Import SSH Config</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Detect hosts from <code className="font-mono">~/.ssh/config</code> and import selected entries.
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={!isInTauri || sshImportLoading || sshImportBusy}
+                    onClick={() => {
+                      void onRefreshSshImport?.();
+                    }}
                   >
-                    Push
+                    {sshImportLoading ? "Scanning..." : "Scan"}
                   </Button>
                 </div>
+
+                {!isInTauri ? (
+                  <div className="text-sm text-muted-foreground">SSH config import is only available in the desktop app.</div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={sshImportBusy || sshImportLoading || sshImportCandidates.length === 0}
+                        onClick={() => setSelectedImportAliases(new Set(sshImportCandidates.map((v) => v.alias)))}
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={sshImportBusy || sshImportLoading}
+                        onClick={() => setSelectedImportAliases(new Set())}
+                      >
+                        Clear
+                      </Button>
+                      <div className="ml-auto text-xs text-muted-foreground">
+                        {selectedImportAliases.size} selected
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-background/40 overflow-hidden">
+                      <div className="overflow-auto min-h-[280px] max-h-[calc(100dvh-300px)]">
+                        {sshImportLoading ? (
+                          <div className="px-4 py-8 text-sm text-muted-foreground">Scanning ~/.ssh ...</div>
+                        ) : sshImportCandidates.length === 0 ? (
+                          <div className="px-4 py-8 text-sm text-muted-foreground">No importable hosts found.</div>
+                        ) : (
+                          <div className="p-3 grid gap-2">
+                            {sshImportCandidates
+                              .slice()
+                              .sort((a, b) => a.alias.toLowerCase().localeCompare(b.alias.toLowerCase()))
+                              .map((item) => {
+                                const checked = selectedImportAliases.has(item.alias);
+                                return (
+                                  <label
+                                    key={`${item.alias}-${item.sourcePath}`}
+                                    className="flex items-start gap-3 p-3 rounded-lg border border-border hover:bg-muted/40 cursor-pointer"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setSelectedImportAliases((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(item.alias)) next.delete(item.alias);
+                                          else next.add(item.alias);
+                                          return next;
+                                        })
+                                      }
+                                      className="mt-1"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-sm font-semibold break-words">{item.alias}</div>
+                                      <div className="text-xs text-muted-foreground break-words mt-0.5">
+                                        {item.user ? `${item.user}@` : ""}
+                                        {item.hostname}
+                                        {item.port && item.port !== 22 ? `:${item.port}` : ""}
+                                      </div>
+                                      <div className="text-[11px] text-muted-foreground/80 break-all mt-1">{item.sourcePath}</div>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="default"
+                        disabled={
+                          sshImportBusy ||
+                          sshImportLoading ||
+                          selectedImportAliases.size === 0 ||
+                          !onImportSshConfigSelected
+                        }
+                        onClick={() => {
+                          void onImportSshConfigSelected?.(Array.from(selectedImportAliases));
+                        }}
+                      >
+                        {sshImportBusy ? "Importing..." : "Import Selected"}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : null}
           </main>

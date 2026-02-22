@@ -136,6 +136,14 @@ export function MainPane(props: {
     return Math.max(0, Math.min(100, (liveInfo.diskRootUsedKb / liveInfo.diskRootTotalKb) * 100));
   }
 
+  function loadRatioPercent() {
+    const load1 = liveInfo?.load1;
+    const cores = liveInfo?.cpuCores;
+    if (typeof load1 !== "number" || Number.isNaN(load1)) return 0;
+    if (typeof cores !== "number" || Number.isNaN(cores) || cores <= 0) return 0;
+    return Math.max(0, Math.min(100, (load1 / cores) * 100));
+  }
+
   function renderCpuGrid(value?: number) {
     const safe = typeof value === "number" && !Number.isNaN(value) ? Math.max(0, Math.min(100, value)) : 0;
     const active = Math.round((safe / 100) * 40);
@@ -194,22 +202,63 @@ export function MainPane(props: {
     );
   }
 
-  function renderTinyTrend() {
-    const maxLen = Math.max(liveHistory.cpu.length, liveHistory.mem.length, liveHistory.load.length);
-    if (maxLen < 2) return <div className="h-7 w-28 rounded bg-muted/25" />;
-
-    const width = 120;
-    const height = 24;
-    const px = (idx: number) => (idx / (maxLen - 1)) * (width - 1);
-    const py = (v: number) => height - 2 - (Math.max(0, Math.min(100, v)) / 100) * (height - 4);
-    const points = (series: number[]) => series.map((v, idx) => `${px(idx)},${py(v)}`).join(" ");
-
+  function renderInlineMeterBar(value: number | undefined, color: string) {
+    const safe = typeof value === "number" && !Number.isNaN(value) ? Math.max(0, Math.min(100, value)) : 0;
+    const segs = 12;
+    const active = Math.round((safe / 100) * segs);
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-7 w-28">
-        <polyline points={points(liveHistory.cpu)} fill="none" stroke={chartPalette.cpu} strokeWidth="1.5" />
-        <polyline points={points(liveHistory.mem)} fill="none" stroke={chartPalette.mem} strokeWidth="1.5" />
-        <polyline points={points(liveHistory.load)} fill="none" stroke={chartPalette.load} strokeWidth="1.5" />
-      </svg>
+      <div className="inline-flex items-center h-4 w-[66px] rounded-sm px-1 gap-[2px]" style={{ background: chartPalette.track }}>
+        {Array.from({ length: segs }, (_, idx) => {
+          const on = idx < active;
+          return (
+            <span
+              key={`${idx}-${on ? 1 : 0}`}
+              className="h-[8px] flex-1 rounded-[2px]"
+              style={{ background: on ? color : "rgba(255,255,255,0.08)" }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderInlineMemMeterBar() {
+    const usedW = memUsedPercent();
+    const cacheW = memCachePercent();
+    const freeW = memFreePercent();
+    return (
+      <div className="inline-flex items-center h-4 w-[66px] rounded-sm overflow-hidden" style={{ background: chartPalette.track }}>
+        <span className="h-full" style={{ width: `${usedW}%`, background: chartPalette.mem }} />
+        <span className="h-full" style={{ width: `${cacheW}%`, background: chartPalette.load }} />
+        <span
+          className="h-full"
+          style={{
+            width: `${freeW}%`,
+            background: appearance === "dark" ? "rgb(203 213 225)" : "rgb(148 163 184)",
+          }}
+        />
+      </div>
+    );
+  }
+
+  function renderTrendMiniBar(value: number | undefined, color: string, label: string) {
+    const safe = typeof value === "number" && !Number.isNaN(value) ? Math.max(0, Math.min(100, value)) : 0;
+    return (
+      <div className="inline-flex items-center gap-1">
+        <span className="text-[9px] text-muted-foreground leading-none w-[8px] text-center">{label}</span>
+        <div className="h-3 w-[28px] rounded-[3px] overflow-hidden" style={{ background: chartPalette.track }}>
+          <div className="h-full rounded-[3px]" style={{ width: `${safe}%`, background: color }} />
+        </div>
+      </div>
+    );
+  }
+
+  function renderTinyTrend() {
+    return (
+      <div className="h-4 inline-flex items-center gap-1.5">
+        {renderTrendMiniBar(memUsedPercent(), chartPalette.mem, "M")}
+        {renderTrendMiniBar(loadRatioPercent(), chartPalette.load, "L")}
+      </div>
     );
   }
 
@@ -376,17 +425,28 @@ export function MainPane(props: {
           {activeSessionId && metricsDockEnabled ? (
             <div className="rounded-xl border border-border/60 bg-background/78 backdrop-blur px-3 py-2">
               {metricsMode === "minimal" ? (
-                <div className="grid grid-cols-[auto_auto_auto_auto_auto_auto_auto_auto_minmax(120px,1fr)_auto] items-center gap-3 text-[11px]">
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">CPU </span><span className="font-semibold tabular-nums">{formatPercent(liveInfo?.cpuPercent)}</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">MEM </span><span className="font-semibold tabular-nums">{formatMem(liveInfo?.memUsedKb)}/{formatMem(liveInfo?.memTotalKb)}</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">MEM% </span><span className="font-semibold tabular-nums">{Math.round(memUsedPercent())}%</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">L1 </span><span className="font-semibold tabular-nums">{formatLoad(liveInfo?.load1)}</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">L5 </span><span className="font-semibold tabular-nums">{formatLoad(liveInfo?.load5)}</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">Disk% </span><span className="font-semibold tabular-nums">{Math.round(diskUsedPercent())}%</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">Idle </span><span className="font-semibold tabular-nums">{formatPercent(liveInfo?.cpuIdlePercent)}</span></div>
-                  <div className="whitespace-nowrap"><span className="text-muted-foreground">Cores </span><span className="font-semibold tabular-nums">{liveInfo?.cpuCores ?? "--"}</span></div>
-                  <div className="justify-self-end">{renderTinyTrend()}</div>
-                  <div className="justify-self-end flex items-center gap-1 text-[10px]">
+                <div className="flex items-center gap-3 text-[11px] min-w-0">
+                  <div className="min-w-0 flex-1 overflow-x-auto scrollbar-hidden">
+                    <div className="w-max min-w-full flex items-center gap-3">
+                      <div className="whitespace-nowrap flex items-center gap-2">
+                        <span><span className="text-muted-foreground">CPU </span><span className="font-semibold tabular-nums">{formatPercent(liveInfo?.cpuPercent)}</span></span>
+                        {renderInlineMeterBar(liveInfo?.cpuPercent, chartPalette.cpu)}
+                      </div>
+                      <div className="whitespace-nowrap flex items-center gap-2">
+                        <span><span className="text-muted-foreground">MEM </span><span className="font-semibold tabular-nums">{formatMem(liveInfo?.memUsedKb)}/{formatMem(liveInfo?.memTotalKb)}</span></span>
+                        {renderInlineMemMeterBar()}
+                      </div>
+                      <div className="whitespace-nowrap flex items-center gap-2">
+                        <span><span className="text-muted-foreground">Disk </span><span className="font-semibold tabular-nums">{Math.round(diskUsedPercent())}%</span></span>
+                        {renderInlineMeterBar(diskUsedPercent(), chartPalette.cpu)}
+                      </div>
+                      <div className="whitespace-nowrap"><span className="text-muted-foreground">L1 </span><span className="font-semibold tabular-nums">{formatLoad(liveInfo?.load1)}</span></div>
+                      <div className="whitespace-nowrap"><span className="text-muted-foreground">L5 </span><span className="font-semibold tabular-nums">{formatLoad(liveInfo?.load5)}</span></div>
+                      <div className="whitespace-nowrap"><span className="text-muted-foreground">Idle </span><span className="font-semibold tabular-nums">{formatPercent(liveInfo?.cpuIdlePercent)}</span></div>
+                      <div>{renderTinyTrend()}</div>
+                    </div>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-1 text-[10px]">
                     <span className="text-muted-foreground">{liveLoading ? "Loading" : liveUpdatedAt ? "Live" : "Pending"}</span>
                     <button
                       type="button"
@@ -454,18 +514,22 @@ export function MainPane(props: {
                       </div>
 
                       <div className="col-span-8 rounded-md bg-muted/40 p-2.5 text-[11px] h-full flex flex-col">
-                        <div className="grid grid-cols-[1fr_1fr_1fr_auto] items-start gap-2">
+                        <div className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] items-start gap-2">
                           <div>
-                            <div className="text-muted-foreground">FREE</div>
-                            <div className="font-semibold tabular-nums whitespace-nowrap">{formatMem(liveInfo.memFreeKb)}</div>
+                            <div className="text-muted-foreground">T</div>
+                            <div className="font-semibold tabular-nums whitespace-nowrap">{formatMem(liveInfo.memTotalKb)}</div>
                           </div>
                           <div>
-                            <div className="text-muted-foreground whitespace-nowrap">USED</div>
+                            <div className="text-muted-foreground">U</div>
                             <div className="font-semibold tabular-nums whitespace-nowrap">{formatMem(liveInfo.memUsedKb)}</div>
                           </div>
                           <div>
-                            <div className="text-muted-foreground whitespace-nowrap">CACHE</div>
+                            <div className="text-muted-foreground whitespace-nowrap">C</div>
                             <div className="font-semibold tabular-nums whitespace-nowrap">{formatMem(liveInfo.memPageCacheKb)}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground whitespace-nowrap">F</div>
+                            <div className="font-semibold tabular-nums whitespace-nowrap">{formatMem(liveInfo.memFreeKb)}</div>
                           </div>
                           <div className="pt-0.5">
                             <div

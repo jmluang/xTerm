@@ -5,9 +5,14 @@ fn keychain_entry(host_id: &str) -> Result<Entry, String> {
 }
 
 pub(crate) fn keychain_set_password(host_id: &str, password: &str) -> Result<(), String> {
-    keychain_entry(host_id)?
-        .set_password(password)
-        .map_err(|e| e.to_string())
+    let entry = keychain_entry(host_id)?;
+    // Some keychain backends do not reliably replace existing entries in-place.
+    // Best-effort delete first makes password updates deterministic.
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    entry.set_password(password).map_err(|e| e.to_string())
 }
 
 pub(crate) fn keychain_has_password(host_id: &str) -> bool {

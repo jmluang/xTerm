@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-import { confirm, message } from "@tauri-apps/plugin-dialog";
 import { ChevronDown } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
@@ -12,11 +10,10 @@ export function HostEditorDialog(props: {
   editingHost: Host | null;
   formData: Partial<Host>;
   setFormData: Dispatch<SetStateAction<Partial<Host>>>;
-  isInTauri: boolean;
   selectIdentityFile: () => Promise<void>;
   onSave: () => Promise<void>;
 }) {
-  const { open, onClose, editingHost, formData, setFormData, isInTauri, selectIdentityFile, onSave } = props;
+  const { open, onClose, editingHost, formData, setFormData, selectIdentityFile, onSave } = props;
   if (!open) return null;
 
   return (
@@ -124,50 +121,11 @@ export function HostEditorDialog(props: {
                           onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                           placeholder={
                             editingHost?.hasPassword || formData.hasPassword
-                              ? "Saved in Keychain (leave empty to keep)"
+                              ? "Edit saved password"
                               : "Leave empty to prompt"
                           }
                           className="flex-1"
                         />
-                        {editingHost?.hasPassword || formData.hasPassword ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={async () => {
-                              if (!isInTauri) return;
-                              if (!editingHost) return;
-                              const ok = await confirm(
-                                "Reveal the saved password from Keychain on this device?",
-                                { title: "Reveal Password", kind: "warning" }
-                              );
-                              if (!ok) return;
-                              try {
-                                const pw = await invoke<string | null>("host_password_get", {
-                                  hostId: editingHost.id,
-                                });
-                                setFormData((prev) => ({ ...prev, password: pw ?? "" }));
-                              } catch (e) {
-                                await message(`Failed to read password from Keychain.\n\n${String(e)}`, {
-                                  title: "Keychain",
-                                  kind: "error",
-                                });
-                              }
-                            }}
-                          >
-                            Reveal
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setFormData((prev) => ({ ...prev, password: "", hasPassword: false }))}
-                          title="Clear saved password"
-                          aria-label="Clear saved password"
-                        >
-                          Clear
-                        </Button>
                       </div>
                       <div className="text-[11px] text-muted-foreground">
                         Passwords are stored in Keychain on this device and are not synced via WebDAV.

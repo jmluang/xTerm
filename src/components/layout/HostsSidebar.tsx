@@ -65,6 +65,7 @@ export function HostsSidebar(props: {
   } = props;
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const hasAnyHosts = hosts.some((h) => !h.deleted);
 
   function formatMem(kb?: number) {
     if (!kb || kb <= 0) return "";
@@ -212,21 +213,23 @@ export function HostsSidebar(props: {
           <PanelLeftClose size={18} />
         </button>
         <div className="flex-1" />
-        <button
-          type="button"
-          className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
-          title="Import SSH Config"
-          aria-label="Import SSH Config"
-          onClick={(e) => {
-            e.stopPropagation();
-            void openSshImportDialog();
-          }}
-          disabled={sshImportLoading || !isInTauri}
-          data-tauri-drag-region="false"
-          style={{ WebkitAppRegion: "no-drag" } as any}
-        >
-          <FileInput size={18} />
-        </button>
+        {!hasAnyHosts ? (
+          <button
+            type="button"
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+            title="Import SSH Config"
+            aria-label="Import SSH Config"
+            onClick={(e) => {
+              e.stopPropagation();
+              void openSshImportDialog();
+            }}
+            disabled={sshImportLoading || !isInTauri}
+            data-tauri-drag-region="false"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <FileInput size={18} />
+          </button>
+        ) : null}
         <button
           type="button"
           className={[

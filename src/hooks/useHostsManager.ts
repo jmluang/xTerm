@@ -216,10 +216,17 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
     }
   }
 
-  function openEditDialog(host: Host) {
+  async function openEditDialog(host: Host) {
     setEditingHost(host);
     setFormData({ ...host });
     setShowDialog(true);
+    if (!isInTauri || !host.hasPassword) return;
+    try {
+      const password = await invoke<string | null>("host_password_get", { hostId: host.id });
+      setFormData((prev) => ({ ...prev, password: password ?? "", hasPassword: !!(password && password.trim()) }));
+    } catch (e) {
+      console.debug("[keychain] preload host password failed", e);
+    }
   }
 
   async function handleSave() {

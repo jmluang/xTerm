@@ -80,7 +80,6 @@ function App() {
             editingHost={ctrl.editingHost}
             formData={ctrl.formData}
             setFormData={ctrl.setFormData}
-            isInTauri={ctrl.isInTauri}
             selectIdentityFile={ctrl.selectIdentityFile}
             onSave={ctrl.handleSave}
           />
@@ -116,6 +115,7 @@ function App() {
           onSaveSettings={ctrl.saveWebdavSettings}
           onPull={ctrl.doWebdavPull}
           onPush={ctrl.doWebdavPush}
+          sshImportBusy={ctrl.sshImportLoading}
         />
       ) : null}
       <ToastViewport />
