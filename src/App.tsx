@@ -1,5 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { HostEditorDialog } from "@/components/dialogs/HostEditorDialog";
 import { SshConfigImportDialog } from "@/components/dialogs/SshConfigImportDialog";
 import { HostsSidebar } from "@/components/layout/HostsSidebar";
@@ -61,13 +62,61 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const w = window as any;
+    const isTauri = !!(w.__TAURI__ || w.__TAURI_INTERNALS__);
+    const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+    if (!isTauri || !isMac) return;
+
+    let disposed = false;
+    const htmlEl = document.documentElement;
+    const prevBodyBg = document.body.style.backgroundColor;
+    const rootEl = document.getElementById("root");
+    const prevRootBg = rootEl?.style.backgroundColor ?? "";
+    const prevHtmlBg = htmlEl.style.backgroundColor;
+
+    (async () => {
+      try {
+        await getCurrentWindow().setBackgroundColor([0, 0, 0, 0]);
+        if (disposed) return;
+        htmlEl.style.backgroundColor = "transparent";
+        document.body.style.backgroundColor = "transparent";
+        if (rootEl) rootEl.style.backgroundColor = "transparent";
+        document.documentElement.dataset.nativeVibrancy = "1";
+      } catch (error) {
+        console.debug("[window] transparent window setup failed", error);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      htmlEl.style.backgroundColor = prevHtmlBg;
+      document.body.style.backgroundColor = prevBodyBg;
+      if (rootEl) rootEl.style.backgroundColor = prevRootBg;
+      delete document.documentElement.dataset.nativeVibrancy;
+    };
+  }, []);
+
+  useEffect(() => {
+    const w = window as any;
+    const isTauri = !!(w.__TAURI__ || w.__TAURI_INTERNALS__);
+    const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+    if (!isTauri || !isMac) return;
+
+    void getCurrentWindow()
+      .setTheme(ctrl.themeMode === "system" ? null : ctrl.themeMode)
+      .catch((error) => {
+        console.debug("[window] setTheme failed", error);
+      });
+  }, [ctrl.themeMode]);
+
   return (
-    <div className="h-screen text-foreground overflow-hidden" style={{ background: "var(--app-bg)" } as any}>
+    <div className="h-screen text-foreground overflow-hidden" style={{ background: "transparent" } as any}>
       <div
-        className="grid h-full min-h-0 min-w-0"
+        className="grid h-full min-h-0 min-w-0 relative"
         style={
           ctrl.sidebarOpen
-            ? ({ gridTemplateColumns: `${clampSidebarWidth(sidebarWidth)}px 4px minmax(0,1fr)` } as any)
+            ? ({ gridTemplateColumns: `${clampSidebarWidth(sidebarWidth)}px minmax(0,1fr)` } as any)
             : ({ gridTemplateColumns: "minmax(0,1fr)" } as any)
         }
       >
@@ -102,7 +151,8 @@ function App() {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize hosts sidebar"
-            className="cursor-col-resize"
+            className="cursor-col-resize absolute top-0 bottom-0 z-20"
+            style={{ left: `${clampSidebarWidth(sidebarWidth) - 2}px`, width: "4px" } as any}
             onPointerDown={(event) => {
               event.preventDefault();
               draggingSidebarRef.current = true;

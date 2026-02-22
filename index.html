@@ -5,9 +5,21 @@
       <link rel="icon" type="image/svg+xml" href="/vite.svg" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>xTermius</title>
+      <script>
+        (function () {
+          try {
+            var key = "xtermius_theme_mode";
+            var mode = localStorage.getItem(key);
+            var systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+            var theme = mode === "light" || mode === "dark" ? mode : (systemDark ? "dark" : "light");
+            document.documentElement.dataset.theme = theme;
+          } catch (_) {}
+        })();
+      </script>
       <style>
         html, body { height: 100%; }
-        body { margin: 0; background: #0b1220; color: #e2e8f0; }
+        body { margin: 0; background: #f5f6f8; color: #1f2937; }
+        html[data-theme="dark"] body { background: #151515; color: #e5e7eb; }
         #root {
           height: 100%;
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -23,10 +35,14 @@
         .spinner {
           width: 32px;
           height: 32px;
-          border: 3px solid rgba(226, 232, 240, 0.2);
-          border-top-color: #e2e8f0;
+          border: 3px solid rgba(31, 41, 55, 0.15);
+          border-top-color: rgba(31, 41, 55, 0.85);
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
+        }
+        html[data-theme="dark"] .spinner {
+          border-color: rgba(229, 231, 235, 0.18);
+          border-top-color: rgba(229, 231, 235, 0.9);
         }
         @keyframes spin {
           to { transform: rotate(360deg); }
