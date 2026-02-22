@@ -1,1 +1,1 @@
-export type SettingsSection = "terminal" | "appearance" | "sync";
+export type SettingsSection = "terminal" | "sync" | "import";

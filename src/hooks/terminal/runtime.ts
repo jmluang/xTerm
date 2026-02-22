@@ -77,7 +77,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const term = terminalRefs.terminalInstance.current;
     if (!term) return;
     try {
-      const appearance = resolvedTheme();
+      const appearance = themeMode === "light" || themeMode === "dark" ? themeMode : resolvedTheme();
       const cssBackground = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
       const background = cssBackground || (appearance === "dark" ? "#0b0f16" : "#ffffff");
       term.options.theme = getTerminalTheme(terminalThemeId, appearance, background);
@@ -169,6 +169,10 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     applyTerminalTheme();
+    const raf = window.requestAnimationFrame(() => {
+      applyTerminalTheme();
+    });
+    return () => window.cancelAnimationFrame(raf);
   }, [themeMode, terminalThemeId]);
 
   useEffect(() => {

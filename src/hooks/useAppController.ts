@@ -11,6 +11,7 @@ import {
   type TerminalOptionsState,
 } from "@/lib/terminalOptions";
 import {
+  SETTINGS_HOSTS_RELOAD_EVENT,
   SETTINGS_NAVIGATE_EVENT,
   SETTINGS_METRICS_DOCK_EVENT,
   SETTINGS_TERMINAL_OPTIONS_EVENT,
@@ -18,6 +19,7 @@ import {
   SETTINGS_THEME_MODE_EVENT,
   type SettingsMetricsDockPayload,
   type SettingsNavigatePayload,
+  type SettingsHostsReloadPayload,
   type SettingsTerminalOptionsPayload,
   type SettingsTerminalThemePayload,
   type SettingsThemeModePayload,
@@ -102,6 +104,7 @@ export function useAppController() {
     let unlistenTerminalTheme: (() => void) | null = null;
     let unlistenTerminalOptions: (() => void) | null = null;
     let unlistenMetricsDock: (() => void) | null = null;
+    let unlistenHostsReload: (() => void) | null = null;
 
     (async () => {
       try {
@@ -129,6 +132,11 @@ export function useAppController() {
           const enabled = event.payload?.enabled;
           if (typeof enabled === "boolean") setMetricsDockEnabledState(enabled);
         });
+
+        unlistenHostsReload = await listen<SettingsHostsReloadPayload>(SETTINGS_HOSTS_RELOAD_EVENT, () => {
+          void hostsMgr.loadHosts();
+        });
+
       } catch (error) {
         console.debug("[settings-window] event listeners unavailable", error);
       }
@@ -152,6 +160,11 @@ export function useAppController() {
       }
       try {
         unlistenMetricsDock?.();
+      } catch {
+        // ignore
+      }
+      try {
+        unlistenHostsReload?.();
       } catch {
         // ignore
       }
@@ -250,7 +263,7 @@ export function useAppController() {
     deleteHost: hostsMgr.deleteHost,
     connectToHost: terminal.connectToHost,
     openAddDialog: hostsMgr.openAddDialog,
-    openSshImportDialog: hostsMgr.openSshImportDialog,
+    openSshImportDialog: () => openSettings("import"),
     importSshConfigHosts: hostsMgr.importSshConfigHosts,
     showSshImportDialog: hostsMgr.showSshImportDialog,
     setShowSshImportDialog: hostsMgr.setShowSshImportDialog,

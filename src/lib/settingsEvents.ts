@@ -8,6 +8,7 @@ export const SETTINGS_THEME_MODE_EVENT = "settings:theme-mode";
 export const SETTINGS_TERMINAL_THEME_EVENT = "settings:terminal-theme";
 export const SETTINGS_TERMINAL_OPTIONS_EVENT = "settings:terminal-options";
 export const SETTINGS_METRICS_DOCK_EVENT = "settings:metrics-dock";
+export const SETTINGS_HOSTS_RELOAD_EVENT = "settings:hosts-reload";
 
 export type SettingsNavigatePayload = {
   section: SettingsSection;
@@ -27,4 +28,8 @@ export type SettingsTerminalOptionsPayload = {
 
 export type SettingsMetricsDockPayload = {
   enabled: boolean;
+};
+
+export type SettingsHostsReloadPayload = {
+  reason?: "webdav-pull" | "webdav-push" | "manual";
 };

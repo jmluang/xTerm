@@ -96,14 +96,16 @@ export function useSessionActions(params: UseSessionActionsParams) {
 
     try {
       let savedPassword: string | null = null;
-      if (host.password && host.password.trim()) {
-        savedPassword = host.password;
-      } else if (host.hasPassword) {
+      if (host.hasPassword) {
         try {
           savedPassword = await invoke<string | null>("host_password_get", { hostId: host.id });
         } catch (error) {
           console.debug("[keychain] get password failed", error);
         }
+      }
+      if ((!savedPassword || !savedPassword.trim()) && host.password && host.password.trim()) {
+        // Fallback for non-Tauri/local test data or legacy in-memory hosts that still carry plaintext.
+        savedPassword = host.password;
       }
 
       const startedAt = Date.now();
