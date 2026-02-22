@@ -104,6 +104,10 @@ body,
   --app-term-bg: #f5f7fb;
   --app-mainpane-bg: rgba(255, 255, 255, 0.96);
   --app-mainpane-shadow: -10px 0 20px -20px rgba(15, 23, 42, 0.14);
+  --app-settings-shell-bg: #eef1f4;
+  --app-settings-sidebar-bg: #edf1f5;
+  --app-settings-nav-active-bg: rgba(15, 23, 42, 0.08);
+  --app-settings-nav-hover-bg: rgba(15, 23, 42, 0.05);
 }
 
 :root[data-theme="dark"] {
@@ -148,6 +152,10 @@ body,
   --app-term-bg: #232323;
   --app-mainpane-bg: #1c1c1c;
   --app-mainpane-shadow: -10px 0 22px -18px rgba(0, 0, 0, 0.32);
+  --app-settings-shell-bg: #151515;
+  --app-settings-sidebar-bg: #151515;
+  --app-settings-nav-active-bg: rgba(255, 255, 255, 0.10);
+  --app-settings-nav-hover-bg: rgba(255, 255, 255, 0.06);
 }
 
 ::-webkit-scrollbar {
