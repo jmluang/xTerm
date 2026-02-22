@@ -122,9 +122,42 @@ export function SettingsPanel(props: {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onOpenChange]);
 
-  const appearance = useMemo<"light" | "dark">(() => {
-    if (themeMode === "light" || themeMode === "dark") return themeMode;
+  const [appearance, setAppearance] = useState<"light" | "dark">(() => {
+    const datasetTheme = typeof document !== "undefined" ? document.documentElement.dataset.theme : undefined;
+    if (datasetTheme === "light" || datasetTheme === "dark") return datasetTheme;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    if (themeMode === "light" || themeMode === "dark") {
+      setAppearance(themeMode);
+      return;
+    }
+
+    const readCurrentAppearance = () => {
+      const datasetTheme = document.documentElement.dataset.theme;
+      if (datasetTheme === "light" || datasetTheme === "dark") return datasetTheme;
+      return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    };
+
+    setAppearance(readCurrentAppearance());
+    const raf = window.requestAnimationFrame(() => {
+      setAppearance(readCurrentAppearance());
+    });
+
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const onChange = () => setAppearance(readCurrentAppearance());
+    if (mq) {
+      if (typeof mq.addEventListener === "function") mq.addEventListener("change", onChange);
+      else if (typeof (mq as any).addListener === "function") (mq as any).addListener(onChange);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      if (!mq) return;
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onChange);
+      else if (typeof (mq as any).removeListener === "function") (mq as any).removeListener(onChange);
+    };
   }, [themeMode]);
 
   const previewTheme = useMemo(
@@ -136,61 +169,81 @@ export function SettingsPanel(props: {
     setTerminalOptions((prev) => sanitizeTerminalOptions({ ...prev, ...patch }));
   }
 
+  const isStandaloneSettingsWindow =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("panel") === "settings";
+
   if (!open) return null;
 
   return (
     <div className="absolute inset-0 z-[70]" data-tauri-drag-region="false" style={{ WebkitAppRegion: "no-drag" } as any}>
-      <div className="absolute inset-0 bg-background/95 backdrop-blur-xl" />
+      <div
+        className={
+          isStandaloneSettingsWindow
+            ? "absolute inset-0"
+            : "absolute inset-0 bg-background/95 backdrop-blur-xl"
+        }
+        style={isStandaloneSettingsWindow ? ({ background: "var(--app-settings-shell-bg)" } as any) : undefined}
+      />
       <div className="absolute inset-0 flex flex-col">
-        <header
-          data-tauri-drag-region
-          className={[
-            "h-[44px] pt-[4px] border-b border-border pr-4 flex items-center justify-between select-none",
-            isMac ? "pl-[88px]" : "pl-4",
-          ].join(" ")}
-          style={{ WebkitAppRegion: "drag" } as any}
+        <div
+          className="min-h-0 flex flex-col flex-1 overflow-hidden"
+          style={{ background: isStandaloneSettingsWindow ? "var(--app-settings-shell-bg)" : "var(--app-mainpane-bg)" } as any}
         >
-          <div className="text-xl font-semibold">Settings</div>
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
-            aria-label="Close settings"
-            title="Close"
-            data-tauri-drag-region="false"
-            style={{ WebkitAppRegion: "no-drag" } as any}
+          <header
+            data-tauri-drag-region
+            className={[
+              "h-[44px] pt-[4px] pr-4 flex items-center justify-between select-none",
+              isMac ? "pl-[88px]" : "pl-4",
+            ].join(" ")}
+            style={{ background: "var(--app-settings-shell-bg)", WebkitAppRegion: "drag" } as any}
           >
-            <X size={18} />
-          </button>
-        </header>
+            <div className="text-sm font-semibold leading-none text-muted-foreground/80">Settings</div>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent inline-flex items-center justify-center"
+              aria-label="Close settings"
+              title="Close"
+              data-tauri-drag-region="false"
+              style={{ WebkitAppRegion: "no-drag" } as any}
+            >
+              <X size={18} />
+            </button>
+          </header>
 
-        <div className="flex-1 min-h-0 grid grid-cols-[260px_1fr]">
-          <aside className="border-r border-border p-3 overflow-auto">
-            <div className="grid gap-1">
-              {[
-                { id: "terminal", label: "Terminal" },
-                { id: "sync", label: "Sync" },
-                { id: "import", label: "Import SSH Config" },
-              ].map((section) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  onClick={() => setActiveSection(section.id as SettingsSection)}
-                  className={[
-                    "h-10 px-3 rounded-lg text-left text-sm",
-                    activeSection === section.id
-                      ? "bg-accent text-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-accent/60",
-                  ].join(" ")}
-                >
-                  {section.label}
-                </button>
-              ))}
-            </div>
-          </aside>
+          <div className="flex-1 min-h-0 grid grid-cols-[260px_1fr]">
+            <aside className="p-3 overflow-auto" style={{ background: "var(--app-settings-sidebar-bg)" } as any}>
+              <div className="grid gap-1">
+                {[
+                  { id: "terminal", label: "Terminal" },
+                  { id: "sync", label: "Sync" },
+                  { id: "import", label: "Import SSH Config" },
+                ].map((section) => (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => setActiveSection(section.id as SettingsSection)}
+                    className={[
+                      "h-10 px-3 rounded-lg text-left text-sm",
+                      activeSection === section.id
+                        ? "text-foreground bg-[var(--app-settings-nav-active-bg)]"
+                        : "text-muted-foreground hover:text-foreground hover:bg-[var(--app-settings-nav-hover-bg)]",
+                    ].join(" ")}
+                  >
+                    {section.label}
+                  </button>
+                ))}
+              </div>
+            </aside>
 
-          <main className="min-h-0 overflow-auto p-6">
-            {activeSection === "terminal" ? (
+            <main
+              className={[
+                "min-h-0 overflow-auto p-5 md:p-6",
+                isStandaloneSettingsWindow ? "rounded-l-xl overflow-hidden" : "",
+              ].join(" ")}
+              style={{ background: "var(--app-mainpane-bg)" } as any}
+            >
+              {activeSection === "terminal" ? (
               <div className="mx-auto max-w-4xl grid gap-4">
                 <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
                   <div className="flex items-start justify-between gap-4">
@@ -655,7 +708,8 @@ export function SettingsPanel(props: {
                 )}
               </div>
             ) : null}
-          </main>
+            </main>
+          </div>
         </div>
       </div>
     </div>
