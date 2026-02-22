@@ -96,7 +96,17 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
 
   function openAddDialog() {
     setEditingHost(null);
-    setFormData({ name: "", alias: "", hostname: "", user: "", port: 22, tags: [], notes: "" });
+    setFormData({
+      name: "",
+      alias: "",
+      hostname: "",
+      user: "",
+      port: 22,
+      tags: [],
+      notes: "",
+      hostInsightsEnabled: true,
+      hostLiveMetricsEnabled: true,
+    });
     setShowDialog(true);
   }
 
@@ -176,6 +186,8 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
         user,
         port,
         hasPassword: false,
+        hostInsightsEnabled: true,
+        hostLiveMetricsEnabled: true,
         identityFile: item.identityFile,
         proxyJump: item.proxyJump,
         envVars: "",
@@ -262,6 +274,8 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
         port: formData.port || 22,
         password: formData.password,
         hasPassword: !!(formData.password && String(formData.password).trim()),
+        hostInsightsEnabled: formData.hostInsightsEnabled !== false,
+        hostLiveMetricsEnabled: formData.hostLiveMetricsEnabled !== false,
         identityFile: formData.identityFile,
         proxyJump: formData.proxyJump,
         envVars: formData.envVars,

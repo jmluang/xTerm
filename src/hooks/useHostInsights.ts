@@ -6,6 +6,8 @@ import type { Host, HostLiveInfo, HostStaticInfo, Session } from "@/types/models
 type HostStaticState = {
   info?: HostStaticInfo;
   updatedAt?: number;
+  autoFailureCount?: number;
+  autoPaused?: boolean;
 };
 
 type HostStaticStateMap = Record<string, HostStaticState>;
@@ -59,26 +61,56 @@ export function useHostInsights(params: {
   }, [hostStaticById]);
 
   const refreshHostStatic = useCallback(
-    async (host: Host) => {
+    async (host: Host, opts?: { source?: "manual" | "auto" }) => {
       if (!isInTauri) return;
+      const source = opts?.source ?? "manual";
       setRefreshingHostIds((prev) => ({ ...prev, [host.id]: true }));
       try {
         const info = await invoke<HostStaticInfo>("host_probe_static", { host });
         setHostStaticById((prev) => ({
           ...prev,
           [host.id]: {
+            ...(prev[host.id] || {}),
             info,
             updatedAt: Date.now(),
+            autoFailureCount: 0,
+            autoPaused: false,
           },
         }));
       } catch (error) {
         const reason = normalizeError(error);
-        showToast({
-          tone: "warning",
-          title: `Refresh failed · ${host.alias || host.hostname || "Host"}`,
-          description: reason,
-          durationMs: 2800,
-        });
+        if (source === "auto") {
+          let pausedNow = false;
+          let nextCount = 1;
+          setHostStaticById((prev) => {
+            const current = prev[host.id] || {};
+            nextCount = Math.min(99, (current.autoFailureCount || 0) + 1);
+            pausedNow = nextCount >= 2;
+            return {
+              ...prev,
+              [host.id]: {
+                ...current,
+                autoFailureCount: nextCount,
+                autoPaused: pausedNow,
+              },
+            };
+          });
+          if (pausedNow) {
+            showToast({
+              tone: "warning",
+              title: `Auto host info paused · ${host.alias || host.hostname || "Host"}`,
+              description: "Static host info failed twice. Use manual refresh to retry.",
+              durationMs: 2200,
+            });
+          }
+        } else {
+          showToast({
+            tone: "warning",
+            title: `Refresh failed · ${host.alias || host.hostname || "Host"}`,
+            description: reason,
+            durationMs: 2800,
+          });
+        }
       } finally {
         setRefreshingHostIds((prev) => {
           const next = { ...prev };
@@ -96,14 +128,16 @@ export function useHostInsights(params: {
     if (!activeSession || activeSession.status !== "running") return;
     const host = hosts.find((item) => item.id === activeSession.hostId);
     if (!host) return;
+    if (host.hostInsightsEnabled === false) return;
 
     const state = hostStaticById[host.id];
     if (state?.info) return;
+    if (state?.autoPaused) return;
     if (refreshingHostIds[host.id]) return;
     if (autoStaticRefreshInFlight.current.has(host.id)) return;
 
     autoStaticRefreshInFlight.current.add(host.id);
-    void refreshHostStatic(host).finally(() => {
+    void refreshHostStatic(host, { source: "auto" }).finally(() => {
       autoStaticRefreshInFlight.current.delete(host.id);
     });
   }, [isInTauri, sessions, activeSessionId, hosts, hostStaticById, refreshingHostIds, refreshHostStatic]);
@@ -138,6 +172,17 @@ export function useHostInsights(params: {
       setLiveHostId(null);
       setLiveInfo(null);
       setLiveError("Host not found");
+      setLiveLoading(false);
+      setLiveUpdatedAt(null);
+      setLiveHistory({ cpu: [], mem: [], load: [] });
+      return;
+    }
+
+    if (host.hostLiveMetricsEnabled === false) {
+      lastLiveHostIdRef.current = null;
+      setLiveHostId(host.id);
+      setLiveInfo(null);
+      setLiveError(null);
       setLiveLoading(false);
       setLiveUpdatedAt(null);
       setLiveHistory({ cpu: [], mem: [], load: [] });

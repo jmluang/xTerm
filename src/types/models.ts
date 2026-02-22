@@ -7,6 +7,8 @@ export interface Host {
   port: number;
   password?: string;
   hasPassword?: boolean;
+  hostInsightsEnabled?: boolean;
+  hostLiveMetricsEnabled?: boolean;
   identityFile?: string;
   proxyJump?: string;
   envVars?: string;

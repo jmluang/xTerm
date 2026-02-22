@@ -52,6 +52,8 @@ fn ensure_hosts_schema(conn: &Connection) -> Result<(), String> {
           port          INTEGER NOT NULL,
           password      TEXT,
           has_password  INTEGER NOT NULL DEFAULT 0,
+          host_insights_enabled INTEGER NOT NULL DEFAULT 1,
+          host_live_metrics_enabled INTEGER NOT NULL DEFAULT 1,
           identity_file TEXT,
           proxy_jump    TEXT,
           env_vars      TEXT,
@@ -71,6 +73,14 @@ fn ensure_hosts_schema(conn: &Connection) -> Result<(), String> {
     );
     let _ = conn.execute(
         "ALTER TABLE hosts ADD COLUMN has_password INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE hosts ADD COLUMN host_insights_enabled INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE hosts ADD COLUMN host_live_metrics_enabled INTEGER NOT NULL DEFAULT 1",
         [],
     );
     Ok(())
@@ -149,9 +159,9 @@ pub(crate) fn import_hosts_json_to_db(
             r#"
             INSERT INTO hosts (
               id, sort_order, name, alias, hostname, user, port,
-              password, has_password, identity_file, proxy_jump, env_vars, encoding,
+              password, has_password, host_insights_enabled, host_live_metrics_enabled, identity_file, proxy_jump, env_vars, encoding,
               tags_json, notes, updated_at, deleted
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
             "#,
             params![
                 h.id,
@@ -163,6 +173,8 @@ pub(crate) fn import_hosts_json_to_db(
                 h.port as u32,
                 Option::<String>::None,
                 if has_password { 1 } else { 0 },
+                if h.host_insights_enabled { 1 } else { 0 },
+                if h.host_live_metrics_enabled { 1 } else { 0 },
                 h.identity_file,
                 h.proxy_jump,
                 h.env_vars,
@@ -204,7 +216,7 @@ pub fn hosts_load() -> Result<Vec<Host>, String> {
             r#"
             SELECT
               id, sort_order, name, alias, hostname, user, port,
-              password, has_password, identity_file, proxy_jump, env_vars, encoding,
+              password, has_password, host_insights_enabled, host_live_metrics_enabled, identity_file, proxy_jump, env_vars, encoding,
               tags_json, notes, updated_at, deleted
             FROM hosts
             ORDER BY sort_order ASC, updated_at DESC
@@ -214,7 +226,7 @@ pub fn hosts_load() -> Result<Vec<Host>, String> {
 
     let rows = stmt
         .query_map([], |row| {
-            let tags_json: String = row.get(13)?;
+            let tags_json: String = row.get(15)?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let id: String = row.get(0)?;
             Ok(Host {
@@ -230,15 +242,23 @@ pub fn hosts_load() -> Result<Vec<Host>, String> {
                 },
                 password: None,
                 has_password: keychain_has_password(&id),
-                identity_file: row.get(9)?,
-                proxy_jump: row.get(10)?,
-                env_vars: row.get(11)?,
-                encoding: row.get(12)?,
+                host_insights_enabled: {
+                    let v: i64 = row.get(9)?;
+                    v != 0
+                },
+                host_live_metrics_enabled: {
+                    let v: i64 = row.get(10)?;
+                    v != 0
+                },
+                identity_file: row.get(11)?,
+                proxy_jump: row.get(12)?,
+                env_vars: row.get(13)?,
+                encoding: row.get(14)?,
                 tags,
-                notes: row.get(14)?,
-                updated_at: row.get(15)?,
+                notes: row.get(16)?,
+                updated_at: row.get(17)?,
                 deleted: {
-                    let d: i64 = row.get(16)?;
+                    let d: i64 = row.get(18)?;
                     d != 0
                 },
             })

@@ -324,29 +324,48 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const term = terminalRefs.terminalInstance.current;
     if (!terminalReady || !term) return;
     if (!activeSessionId) return;
+    let cancelled = false;
 
-    const start = performance.now();
-    try {
-      term.reset();
-    } catch {
-      return;
-    }
+    const raf = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      const start = performance.now();
+      try {
+        term.clear();
+      } catch {
+        return;
+      }
 
-    applyTerminalTheme();
-    const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
+      applyTerminalTheme();
+      const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
 
-    const finishSwitch = () => {
-      scheduleFitAndResize(0);
-      window.requestAnimationFrame(() => {
-        term.focus();
-        recordTabSwitchLatency(performance.now() - start);
-      });
+      const finishSwitch = () => {
+        if (cancelled) return;
+        scheduleFitAndResize(0);
+        window.requestAnimationFrame(() => {
+          if (cancelled) return;
+          try {
+            term.focus();
+          } catch (error) {
+            console.debug("[xterm] focus skipped after session switch", error);
+          }
+          recordTabSwitchLatency(performance.now() - start);
+        });
+      };
+
+      try {
+        if (text) {
+          term.write(text, finishSwitch);
+        } else {
+          finishSwitch();
+        }
+      } catch (error) {
+        console.debug("[xterm] write skipped after session switch", error);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
     };
-
-    if (text) {
-      term.write(text, finishSwitch);
-    } else {
-      finishSwitch();
-    }
   }, [activeSessionId, runtimeRefs.sessionBuffers, terminalReady]);
 }

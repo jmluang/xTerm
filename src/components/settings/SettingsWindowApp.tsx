@@ -141,6 +141,8 @@ export function SettingsWindowApp() {
           user,
           port,
           hasPassword: false,
+          hostInsightsEnabled: true,
+          hostLiveMetricsEnabled: true,
           identityFile: item.identityFile,
           proxyJump: item.proxyJump,
           envVars: "",

@@ -20,6 +20,12 @@ pub struct Host {
     #[serde(rename = "hasPassword")]
     #[serde(default)]
     pub has_password: bool,
+    #[serde(rename = "hostInsightsEnabled")]
+    #[serde(default = "default_true")]
+    pub host_insights_enabled: bool,
+    #[serde(rename = "hostLiveMetricsEnabled")]
+    #[serde(default = "default_true")]
+    pub host_live_metrics_enabled: bool,
     #[serde(rename = "identityFile")]
     pub identity_file: Option<String>,
     #[serde(rename = "proxyJump")]
@@ -42,6 +48,10 @@ pub struct Host {
 
 fn default_port() -> u16 {
     22
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
