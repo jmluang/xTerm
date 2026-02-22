@@ -1,4 +1,5 @@
 import "@xterm/xterm/css/xterm.css";
+import { useEffect, useRef, useState } from "react";
 import { HostEditorDialog } from "@/components/dialogs/HostEditorDialog";
 import { SshConfigImportDialog } from "@/components/dialogs/SshConfigImportDialog";
 import { HostsSidebar } from "@/components/layout/HostsSidebar";
@@ -8,15 +9,68 @@ import { MainPane } from "@/components/layout/MainPane";
 import { ToastViewport } from "@/components/ui/ToastViewport";
 import { useAppController } from "@/hooks/useAppController";
 
+const SIDEBAR_WIDTH_KEY = "xtermius_hosts_sidebar_width";
+const SIDEBAR_WIDTH_DEFAULT = 288;
+const SIDEBAR_WIDTH_MIN = 220;
+
+function clampSidebarWidth(width: number) {
+  const max = Math.max(SIDEBAR_WIDTH_MIN, Math.floor(window.innerWidth * (2 / 3)));
+  return Math.max(SIDEBAR_WIDTH_MIN, Math.min(max, Math.round(width)));
+}
+
 function App() {
   const panel = new URLSearchParams(window.location.search).get("panel");
   if (panel === "settings") return <SettingsWindowApp />;
 
   const ctrl = useAppController();
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY) || SIDEBAR_WIDTH_DEFAULT);
+    return Number.isFinite(raw) ? Math.max(SIDEBAR_WIDTH_MIN, Math.round(raw)) : SIDEBAR_WIDTH_DEFAULT;
+  });
+  const draggingSidebarRef = useRef(false);
+
+  useEffect(() => {
+    if (!ctrl.sidebarOpen) return;
+    const onResize = () => setSidebarWidth((prev) => clampSidebarWidth(prev));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [ctrl.sidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      if (!draggingSidebarRef.current) return;
+      setSidebarWidth(clampSidebarWidth(event.clientX));
+    };
+    const onPointerUp = () => {
+      if (!draggingSidebarRef.current) return;
+      draggingSidebarRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
 
   return (
     <div className="h-screen text-foreground overflow-hidden" style={{ background: "var(--app-bg)" } as any}>
-      <div className={["grid h-full min-h-0 min-w-0", ctrl.sidebarOpen ? "grid-cols-[288px_1fr]" : "grid-cols-1"].join(" ")}>
+      <div
+        className="grid h-full min-h-0 min-w-0"
+        style={
+          ctrl.sidebarOpen
+            ? ({ gridTemplateColumns: `${clampSidebarWidth(sidebarWidth)}px 4px minmax(0,1fr)` } as any)
+            : ({ gridTemplateColumns: "minmax(0,1fr)" } as any)
+        }
+      >
         {ctrl.sidebarOpen ? (
           <HostsSidebar
             hostListRef={ctrl.hostListRef}
@@ -43,7 +97,20 @@ function App() {
             setSidebarOpen={ctrl.setSidebarOpen}
           />
         ) : null}
-
+        {ctrl.sidebarOpen ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize hosts sidebar"
+            className="cursor-col-resize"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              draggingSidebarRef.current = true;
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+            }}
+          />
+        ) : null}
         <MainPane
           sidebarOpen={ctrl.sidebarOpen}
           setSidebarOpen={ctrl.setSidebarOpen}
@@ -73,6 +140,7 @@ function App() {
           liveUpdatedAt={ctrl.liveUpdatedAt}
           liveHistory={ctrl.liveHistory}
           metricsDockEnabled={ctrl.metricsDockEnabled}
+          themeMode={ctrl.themeMode}
         >
           <HostEditorDialog
             open={ctrl.showDialog}

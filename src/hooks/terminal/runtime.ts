@@ -80,7 +80,11 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       const appearance = themeMode === "light" || themeMode === "dark" ? themeMode : resolvedTheme();
       const cssBackground = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
       const background = cssBackground || (appearance === "dark" ? "#0b0f16" : "#ffffff");
-      term.options.theme = getTerminalTheme(terminalThemeId, appearance, background);
+      const nextTheme = getTerminalTheme(terminalThemeId, appearance, background);
+      term.options.theme = nextTheme;
+      const surfaceBg = nextTheme.background || background;
+      terminalRefs.terminalContainerRef.current?.style.setProperty("--xterm-surface-bg", surfaceBg);
+      terminalRefs.terminalRef.current?.style.setProperty("--xterm-surface-bg", surfaceBg);
       term.refresh(0, term.rows - 1);
     } catch {
       // Ignore; renderer can be temporarily unavailable during init/dispose.

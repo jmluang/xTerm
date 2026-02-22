@@ -127,7 +127,10 @@ export function SettingsPanel(props: {
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }, [themeMode]);
 
-  const previewTheme = useMemo(() => getTerminalTheme(terminalThemeId, appearance, "#ffffff"), [terminalThemeId, appearance]);
+  const previewTheme = useMemo(
+    () => getTerminalTheme(terminalThemeId, appearance, appearance === "dark" ? "#0f1112" : "#ffffff"),
+    [terminalThemeId, appearance]
+  );
 
   function patchTerminalOptions(patch: Partial<TerminalOptionsState>) {
     setTerminalOptions((prev) => sanitizeTerminalOptions({ ...prev, ...patch }));
