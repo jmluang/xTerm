@@ -95,7 +95,9 @@ body,
   --app-chip-failed: rgba(220, 38, 38, 0.10);
   --app-chip-failed-hover: rgba(220, 38, 38, 0.14);
   --app-chip-failed-text: rgba(153, 27, 27, 0.95);
-  --app-term-bg: #ffffff;
+  --app-term-bg: #f5f7fb;
+  --app-mainpane-bg: rgba(255, 255, 255, 0.96);
+  --app-mainpane-shadow: -14px 0 28px -22px rgba(15, 23, 42, 0.22);
 }
 
 :root[data-theme="dark"] {
@@ -131,7 +133,9 @@ body,
   --app-chip-failed: rgba(248, 113, 113, 0.16);
   --app-chip-failed-hover: rgba(248, 113, 113, 0.22);
   --app-chip-failed-text: rgba(254, 226, 226, 0.95);
-  --app-term-bg: #0f1112;
+  --app-term-bg: #171a1d;
+  --app-mainpane-bg: rgba(13, 15, 16, 0.985);
+  --app-mainpane-shadow: -16px 0 34px -22px rgba(0, 0, 0, 0.6);
 }
 
 ::-webkit-scrollbar {

@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { Cloud, PanelLeftOpen, Plus, Settings2 } from "lucide-react";
+import type { ThemeMode } from "@/lib/theme";
 import type { Host, HostLiveInfo, Session } from "@/types/models";
 
 export function MainPane(props: {
@@ -25,6 +26,7 @@ export function MainPane(props: {
   liveUpdatedAt: number | null;
   liveHistory: { cpu: number[]; mem: number[]; load: number[] };
   metricsDockEnabled: boolean;
+  themeMode: ThemeMode;
   children?: ReactNode;
 }) {
   const {
@@ -49,6 +51,7 @@ export function MainPane(props: {
     liveUpdatedAt,
     liveHistory,
     metricsDockEnabled,
+    themeMode,
     children,
   } = props;
 
@@ -64,13 +67,14 @@ export function MainPane(props: {
     }
   }, [metricsDockEnabled]);
 
-  function resolvedAppearance(): "light" | "dark" {
+  function resolvedAppearance(mode: ThemeMode): "light" | "dark" {
+    if (mode === "light" || mode === "dark") return mode;
     const datasetTheme = document.documentElement.dataset.theme;
     if (datasetTheme === "light" || datasetTheme === "dark") return datasetTheme;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
 
-  const appearance = resolvedAppearance();
+  const appearance = resolvedAppearance(themeMode);
   const chartPalette =
     appearance === "dark"
       ? {
@@ -263,7 +267,20 @@ export function MainPane(props: {
   }
 
   return (
-    <div className="min-w-0 min-h-0 flex flex-col" style={{ background: "var(--app-bg)" } as any}>
+    <div
+      className={[
+        "min-w-0 min-h-0 flex flex-col",
+        sidebarOpen ? "rounded-l-2xl overflow-hidden" : "",
+      ].join(" ")}
+      style={
+        {
+          background: sidebarOpen
+            ? "var(--app-mainpane-bg)"
+            : "var(--app-bg)",
+          boxShadow: sidebarOpen ? "var(--app-mainpane-shadow)" : "none",
+        } as any
+      }
+    >
       <div
         data-tauri-drag-region
         className={[
@@ -394,19 +411,24 @@ export function MainPane(props: {
       </div>
 
       <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-        <div className="flex-1 min-h-0 pt-1 px-3 pb-3 flex flex-col gap-2 overflow-hidden">
+        <div className="flex-1 min-h-0 pt-1 px-2 pb-2 flex flex-col gap-2 overflow-hidden">
           <div className="relative flex-1 min-h-0 overflow-hidden">
             <div
               ref={terminalContainerRef}
-              className="h-full w-full min-h-0 rounded-xl p-2 overflow-hidden"
+              className="h-full w-full min-h-0 rounded-2xl overflow-hidden ring-1 ring-border/40"
               data-has-session={hasSession ? "1" : "0"}
-              style={{ background: "var(--app-term-bg)" } as any}
+              style={{ background: "var(--xterm-surface-bg, var(--app-term-bg))" } as any}
               onMouseDown={onTerminalMouseDown}
             >
               <div
                 ref={terminalRef}
-                className="h-full w-full"
-                style={!activeSessionId ? ({ visibility: "hidden", pointerEvents: "none" } as any) : undefined}
+                className="h-full w-full box-border px-3 py-2"
+                style={
+                  {
+                    background: "var(--xterm-surface-bg, var(--app-term-bg))",
+                    ...( !activeSessionId ? ({ visibility: "hidden", pointerEvents: "none" } as any) : {}),
+                  } as any
+                }
               />
             </div>
 
