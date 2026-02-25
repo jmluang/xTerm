@@ -239,9 +239,15 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   useEffect(() => {
     if (!terminalReady) return;
     if (sessions.length !== 0) return;
-    terminalRefs.terminalInstance.current?.clearSelection();
-    terminalRefs.terminalInstance.current?.blur();
-    terminalRefs.terminalInstance.current?.clear();
+    const term = terminalRefs.terminalInstance.current;
+    if (!term) return;
+    term.clearSelection();
+    term.blur();
+    // Reset emulator state when the last session closes so DEC modes/focus tracking
+    // from a prior session don't leak into the next SSH connection.
+    term.reset();
+    applyTerminalTheme();
+    applyTerminalOptions();
   }, [sessions.length, terminalReady, terminalRefs.terminalInstance]);
 
   useEffect(() => {
@@ -330,12 +336,16 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (cancelled) return;
       const start = performance.now();
       try {
-        term.clear();
+        // `clear()` preserves the current prompt line and terminal modes in xterm.js.
+        // We need a full reset when reusing one xterm instance across sessions,
+        // otherwise prompt text and DEC modes (eg focus tracking) can leak.
+        term.reset();
       } catch {
         return;
       }
 
       applyTerminalTheme();
+      applyTerminalOptions();
       const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
 
       const finishSwitch = () => {
