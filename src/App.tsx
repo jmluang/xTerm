@@ -197,6 +197,10 @@ function App() {
             onClose={() => ctrl.setShowDialog(false)}
             editingHost={ctrl.editingHost}
             formData={ctrl.formData}
+            metricsDockEnabled={ctrl.metricsDockEnabled}
+            onOpenHostMetricsDockSettings={() => {
+              void ctrl.openSettings("terminal", "host-metrics-dock");
+            }}
             setFormData={ctrl.setFormData}
             selectIdentityFile={ctrl.selectIdentityFile}
             onSave={ctrl.handleSave}
@@ -216,6 +220,7 @@ function App() {
           open={ctrl.showSettings}
           onOpenChange={ctrl.setShowSettings}
           initialSection={ctrl.settingsSection}
+          scrollTarget={ctrl.settingsScrollTarget}
           themeMode={ctrl.themeMode}
           setThemeMode={ctrl.setThemeModeState}
           terminalThemeId={ctrl.terminalThemeId}

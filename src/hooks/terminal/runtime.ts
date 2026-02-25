@@ -346,6 +346,11 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
       applyTerminalTheme();
       applyTerminalOptions();
+      try {
+        term.focus();
+      } catch (error) {
+        console.debug("[xterm] focus skipped before session replay", error);
+      }
       const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
 
       const finishSwitch = () => {

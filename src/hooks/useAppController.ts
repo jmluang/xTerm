@@ -46,6 +46,7 @@ export function useAppController() {
   const [, setActiveDragHostId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("terminal");
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<"host-metrics-dock" | null>(null);
 
   const hostsMgr = useHostsManager({ isInTauri, sidebarOpen });
   const terminal = useTerminalSessions({
@@ -171,8 +172,9 @@ export function useAppController() {
     };
   }, [isInTauri]);
 
-  async function openSettings(section: SettingsSection = "terminal") {
+  async function openSettings(section: SettingsSection = "terminal", target?: "host-metrics-dock") {
     setSettingsSection(section);
+    setSettingsScrollTarget(target ?? null);
     if (!isInTauri) {
       setShowSettings(true);
       return;
@@ -182,11 +184,11 @@ export function useAppController() {
       if (existing) {
         await existing.show();
         await existing.setFocus();
-        await emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section });
+        await emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section, target });
         return;
       }
 
-      const url = `/?panel=settings&section=${section}`;
+      const url = `/?panel=settings&section=${section}${target ? `&target=${target}` : ""}`;
       const settingsWindow = new WebviewWindow("settings", {
         title: "Settings",
         url,
@@ -204,7 +206,7 @@ export function useAppController() {
       });
 
       settingsWindow.once("tauri://created", () => {
-        void emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section });
+        void emitTo<SettingsNavigatePayload>("settings", SETTINGS_NAVIGATE_EVENT, { section, target });
       });
       settingsWindow.once("tauri://error", (error) => {
         console.error("[settings-window] failed to create window", error);
@@ -232,6 +234,7 @@ export function useAppController() {
     showSettings,
     setShowSettings,
     settingsSection,
+    settingsScrollTarget,
     setSettingsSection,
     openSettings,
     settings: webdav.settings,

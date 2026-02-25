@@ -32,6 +32,11 @@ function readInitialSection(): SettingsSection {
   return "terminal";
 }
 
+function readInitialTarget(): "host-metrics-dock" | null {
+  const target = new URLSearchParams(window.location.search).get("target");
+  return target === "host-metrics-dock" ? target : null;
+}
+
 export function SettingsWindowApp() {
   const [isInTauri] = useState(() => {
     const w = window as any;
@@ -42,6 +47,7 @@ export function SettingsWindowApp() {
   const [terminalOptions, setTerminalOptionsState] = useState<TerminalOptionsState>(() => getTerminalOptions());
   const [metricsDockEnabled, setMetricsDockEnabledState] = useState<boolean>(() => getMetricsDockEnabled());
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => readInitialSection());
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<"host-metrics-dock" | null>(() => readInitialTarget());
   const [sshImportLoading, setSshImportLoading] = useState(false);
   const [sshImportBusy, setSshImportBusy] = useState(false);
   const [sshImportCandidates, setSshImportCandidates] = useState<SshConfigImportCandidate[]>([]);
@@ -217,9 +223,11 @@ export function SettingsWindowApp() {
         const current = getCurrentWebviewWindow();
         unlisten = await current.listen<SettingsNavigatePayload>(SETTINGS_NAVIGATE_EVENT, (event) => {
           const section = event.payload?.section;
+          const target = event.payload?.target;
           if (section === "terminal" || section === "sync" || section === "import") {
             setSettingsSection(section);
           }
+          setSettingsScrollTarget(target === "host-metrics-dock" ? target : null);
         });
       } catch (error) {
         console.debug("[settings] listen navigate event failed", error);
@@ -246,6 +254,7 @@ export function SettingsWindowApp() {
           }
         }}
         initialSection={settingsSection}
+        scrollTarget={settingsScrollTarget}
         themeMode={themeMode}
         setThemeMode={setThemeModeState}
         terminalThemeId={terminalThemeId}

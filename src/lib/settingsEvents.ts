@@ -12,6 +12,7 @@ export const SETTINGS_HOSTS_RELOAD_EVENT = "settings:hosts-reload";
 
 export type SettingsNavigatePayload = {
   section: SettingsSection;
+  target?: "host-metrics-dock";
 };
 
 export type SettingsThemeModePayload = {
