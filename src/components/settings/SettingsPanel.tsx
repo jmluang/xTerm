@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { ChevronDown, Minus, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +43,7 @@ export function SettingsPanel(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialSection: SettingsSection;
+  scrollTarget?: "host-metrics-dock" | null;
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
   terminalThemeId: TerminalThemeId;
@@ -70,6 +71,7 @@ export function SettingsPanel(props: {
     open,
     onOpenChange,
     initialSection,
+    scrollTarget = null,
     themeMode,
     setThemeMode,
     terminalThemeId,
@@ -95,12 +97,28 @@ export function SettingsPanel(props: {
   } = props;
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [selectedImportAliases, setSelectedImportAliases] = useState<Set<string>>(new Set());
+  const hostMetricsDockRef = useRef<HTMLDivElement | null>(null);
+  const [highlightHostMetricsDock, setHighlightHostMetricsDock] = useState(false);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 
   useEffect(() => {
     if (!open) return;
     setActiveSection(initialSection);
   }, [open, initialSection]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeSection !== "terminal") return;
+    if (scrollTarget !== "host-metrics-dock") return;
+    const el = hostMetricsDockRef.current;
+    if (!el) return;
+    const raf = window.requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightHostMetricsDock(true);
+      window.setTimeout(() => setHighlightHostMetricsDock(false), 1500);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [open, activeSection, scrollTarget]);
 
   useEffect(() => {
     if (activeSection !== "import") return;
@@ -239,7 +257,7 @@ export function SettingsPanel(props: {
             <main
               className={[
                 "min-h-0 overflow-auto p-5 md:p-6",
-                isStandaloneSettingsWindow ? "rounded-l-xl overflow-hidden" : "",
+                isStandaloneSettingsWindow ? "rounded-l-xl overflow-x-hidden" : "",
               ].join(" ")}
               style={{ background: "var(--app-mainpane-bg)" } as any}
             >
@@ -424,7 +442,14 @@ export function SettingsPanel(props: {
                         ariaLabel="Toggle bright bold text"
                       />
                     </div>
-                    <div className="flex items-center justify-between gap-4">
+                    <div
+                      id="settings-host-metrics-dock"
+                      ref={hostMetricsDockRef}
+                      className={[
+                        "flex items-center justify-between gap-4 rounded-md transition-colors",
+                        highlightHostMetricsDock ? "bg-amber-400/10 ring-1 ring-amber-400/40 px-2 py-1 -mx-2 -my-1" : "",
+                      ].join(" ")}
+                    >
                       <div>
                         <div className="text-sm">Host Metrics Dock</div>
                         <div className="text-xs text-muted-foreground">Show CPU/MEM/Load panel under terminal</div>

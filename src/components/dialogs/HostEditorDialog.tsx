@@ -9,11 +9,13 @@ export function HostEditorDialog(props: {
   onClose: () => void;
   editingHost: Host | null;
   formData: Partial<Host>;
+  metricsDockEnabled: boolean;
+  onOpenHostMetricsDockSettings?: () => void;
   setFormData: Dispatch<SetStateAction<Partial<Host>>>;
   selectIdentityFile: () => Promise<void>;
   onSave: () => Promise<void>;
 }) {
-  const { open, onClose, editingHost, formData, setFormData, selectIdentityFile, onSave } = props;
+  const { open, onClose, editingHost, formData, metricsDockEnabled, onOpenHostMetricsDockSettings, setFormData, selectIdentityFile, onSave } = props;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   if (!open) return null;
 
@@ -208,10 +210,25 @@ export function HostEditorDialog(props: {
                         <div className="text-[11px] text-muted-foreground">
                           Show and poll the live panel below terminal for this host
                         </div>
+                        {!metricsDockEnabled ? (
+                          <div className="mt-1 text-[11px] text-amber-400">
+                            Disabled by global setting.{" "}
+                            <button
+                              type="button"
+                              className="underline underline-offset-2 hover:text-amber-300"
+                              onClick={onOpenHostMetricsDockSettings}
+                            >
+                              Open Terminal Settings
+                            </button>
+                            {" "}and enable &quot;Host Metrics Dock&quot;.
+                          </div>
+                        ) : null}
                       </div>
                       <button
                         type="button"
                         role="switch"
+                        disabled={!metricsDockEnabled}
+                        aria-disabled={!metricsDockEnabled}
                         aria-checked={formData.hostLiveMetricsEnabled !== false}
                         onClick={() =>
                           setFormData({
@@ -221,12 +238,15 @@ export function HostEditorDialog(props: {
                         }
                         className={[
                           "h-7 w-12 rounded-full transition-colors inline-flex items-center px-1 shrink-0",
+                          !metricsDockEnabled ? "opacity-50 cursor-not-allowed" : "",
                           formData.hostLiveMetricsEnabled !== false ? "bg-sky-500/80" : "bg-muted",
                         ].join(" ")}
                         title={
-                          formData.hostLiveMetricsEnabled !== false
-                            ? "Disable live metrics panel"
-                            : "Enable live metrics panel"
+                          !metricsDockEnabled
+                            ? "Enable Host Metrics Dock in Terminal Settings first"
+                            : formData.hostLiveMetricsEnabled !== false
+                              ? "Disable live metrics panel"
+                              : "Enable live metrics panel"
                         }
                       >
                         <span
