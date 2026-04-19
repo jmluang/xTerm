@@ -10,6 +10,8 @@ Tauri (Rust) + React + Vite SSH terminal app using `xterm.js` and a PTY backend.
 
 ## Dev
 
+Run commands from the repository root.
+
 Frontend only:
 
 ```bash
