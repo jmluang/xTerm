@@ -14,6 +14,57 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 type SessionId = u32;
 
+fn extract_ready_utf8_chunks(pending: &mut Vec<u8>) -> Vec<String> {
+    let mut chunks = Vec::new();
+
+    loop {
+        if pending.is_empty() {
+            break;
+        }
+
+        match std::str::from_utf8(pending.as_slice()) {
+            Ok(text) => {
+                if !text.is_empty() {
+                    chunks.push(text.to_string());
+                }
+                pending.clear();
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if let Some(error_len) = error.error_len() {
+                    if valid_up_to > 0 {
+                        chunks.push(String::from_utf8_lossy(&pending[..valid_up_to]).to_string());
+                    }
+
+                    let invalid_end = valid_up_to + error_len;
+                    chunks.push(String::from_utf8_lossy(&pending[valid_up_to..invalid_end]).to_string());
+                    pending.drain(..invalid_end);
+                    continue;
+                }
+
+                if valid_up_to > 0 {
+                    chunks.push(String::from_utf8_lossy(&pending[..valid_up_to]).to_string());
+                    pending.drain(..valid_up_to);
+                }
+                break;
+            }
+        }
+    }
+
+    chunks
+}
+
+fn drain_utf8_tail(pending: &mut Vec<u8>) -> Option<String> {
+    if pending.is_empty() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(pending.as_slice()).to_string();
+    pending.clear();
+    if text.is_empty() { None } else { Some(text) }
+}
+
 pub struct PtyState {
     next_id: AtomicU32,
     sessions: Arc<Mutex<HashMap<SessionId, Arc<Session>>>>,
@@ -107,22 +158,35 @@ pub async fn pty_spawn<R: Runtime>(
     let id_data = id_s.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        let mut pending = Vec::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    // Emit to all windows; frontend filters by session_id.
-                    let _ = app_data.emit(
-                        "pty:data",
-                        PtyDataPayload {
-                            session_id: id_data.clone(),
-                            data,
-                        },
-                    );
+                    pending.extend_from_slice(&buf[..n]);
+                    for data in extract_ready_utf8_chunks(&mut pending) {
+                        // Emit to all windows; frontend filters by session_id.
+                        let _ = app_data.emit(
+                            "pty:data",
+                            PtyDataPayload {
+                                session_id: id_data.clone(),
+                                data,
+                            },
+                        );
+                    }
                 }
                 Err(_) => break,
             }
+        }
+
+        if let Some(data) = drain_utf8_tail(&mut pending) {
+            let _ = app_data.emit(
+                "pty:data",
+                PtyDataPayload {
+                    session_id: id_data.clone(),
+                    data,
+                },
+            );
         }
     });
 
@@ -197,4 +261,40 @@ pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> 
     let mut k = session.killer.lock().map_err(|_| "killer poisoned")?;
     k.kill().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{drain_utf8_tail, extract_ready_utf8_chunks};
+
+    #[test]
+    fn keeps_split_utf8_sequence_until_complete() {
+        let mut pending = vec![0xE4, 0xB8];
+        assert!(extract_ready_utf8_chunks(&mut pending).is_empty());
+        assert_eq!(pending, vec![0xE4, 0xB8]);
+
+        pending.extend_from_slice(&[0xAD, b'!']);
+        let expected = String::from_utf8(vec![0xE4, 0xB8, 0xAD, b'!']).unwrap();
+        assert_eq!(extract_ready_utf8_chunks(&mut pending), vec![expected]);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn replaces_invalid_bytes_without_losing_following_text() {
+        let mut pending = vec![b'A', 0xFF, b'B'];
+        let combined = extract_ready_utf8_chunks(&mut pending).join("");
+        assert_eq!(combined, format!("A{}B", char::REPLACEMENT_CHARACTER));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn drains_incomplete_tail_lossily_at_eof() {
+        let mut pending = vec![b'A', 0xE4, 0xB8];
+        assert_eq!(extract_ready_utf8_chunks(&mut pending), vec!["A".to_string()]);
+        assert_eq!(
+            drain_utf8_tail(&mut pending),
+            Some(String::from_utf8_lossy(&[0xE4, 0xB8]).to_string())
+        );
+        assert!(pending.is_empty());
+    }
 }

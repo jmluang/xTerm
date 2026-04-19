@@ -15,7 +15,7 @@ export function MainPane(props: {
   onOpenSettings: () => void;
   openAddDialog: () => void;
   terminalContainerRef: RefObject<HTMLDivElement>;
-  terminalRef: RefObject<HTMLDivElement>;
+  bindSessionTerminalRef: (sessionId: string) => (node: HTMLDivElement | null) => void;
   hasSession: boolean;
   onTerminalMouseDown: () => void;
   hostHintText: string;
@@ -41,7 +41,7 @@ export function MainPane(props: {
     onOpenSettings,
     openAddDialog,
     terminalContainerRef,
-    terminalRef,
+    bindSessionTerminalRef,
     hasSession,
     onTerminalMouseDown,
     hostHintText,
@@ -419,21 +419,28 @@ export function MainPane(props: {
           <div className="relative flex-1 min-h-0 overflow-hidden">
             <div
               ref={terminalContainerRef}
-              className="h-full w-full min-h-0 rounded-2xl overflow-hidden ring-1 ring-border/40"
+              className="relative h-full w-full min-h-0 rounded-2xl overflow-hidden ring-1 ring-border/40"
               data-has-session={hasSession ? "1" : "0"}
               style={{ background: "var(--xterm-surface-bg, var(--app-term-bg))" } as any}
               onMouseDown={onTerminalMouseDown}
             >
-              <div
-                ref={terminalRef}
-                className="h-full w-full box-border px-3 py-2"
-                style={
-                  {
-                    background: "var(--xterm-surface-bg, var(--app-term-bg))",
-                    ...( !activeSessionId ? ({ visibility: "hidden", pointerEvents: "none" } as any) : {}),
-                  } as any
-                }
-              />
+              {sessions.map((session) => {
+                const active = session.id === activeSessionId;
+                return (
+                  <div
+                    key={session.id}
+                    ref={bindSessionTerminalRef(session.id)}
+                    className="absolute inset-0 h-full w-full"
+                    style={
+                      {
+                        background: "var(--xterm-surface-bg, var(--app-term-bg))",
+                        visibility: active ? "visible" : "hidden",
+                        pointerEvents: active ? "auto" : "none",
+                      } as any
+                    }
+                  />
+                );
+              })}
             </div>
 
             {!activeSessionId ? (

@@ -177,7 +177,7 @@ function App() {
           }}
           openAddDialog={ctrl.openAddDialog}
           terminalContainerRef={ctrl.terminalContainerRef}
-          terminalRef={ctrl.terminalRef}
+          bindSessionTerminalRef={ctrl.bindSessionTerminalRef}
           hasSession={ctrl.sessions.length > 0}
           onTerminalMouseDown={() => {
             if (ctrl.activeSessionId) ctrl.terminalInstance.current?.focus();

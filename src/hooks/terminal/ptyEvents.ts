@@ -11,7 +11,7 @@ type UsePtyEventsParams = {
   setSessions: SetSessions;
   setActiveSessionId: SetActiveSessionId;
   setConnectingHosts: SetConnectingHosts;
-  terminalRefs: Pick<TerminalRefs, "terminalInstance" | "activeSessionIdRef">;
+  terminalRefs: Pick<TerminalRefs, "activeSessionIdRef" | "sessionTerminals">;
   runtimeRefs: SessionRuntimeRefs;
 };
 
@@ -80,14 +80,15 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         }
       }
 
-      appendSessionBuffer(sessionBuffers.current, sessionId, data, MAX_SESSION_BUFFER_CHARS);
-
-      if (terminalRefs.activeSessionIdRef.current === sessionId && terminalRefs.terminalInstance.current) {
+      const handle = terminalRefs.sessionTerminals.current.get(sessionId);
+      if (handle) {
         try {
-          terminalRefs.terminalInstance.current.write(data);
+          handle.terminal.write(data);
         } catch (error) {
           console.debug("[xterm] write skipped (pty:data)", error);
         }
+      } else {
+        appendSessionBuffer(sessionBuffers.current, sessionId, data, MAX_SESSION_BUFFER_CHARS);
       }
     });
 

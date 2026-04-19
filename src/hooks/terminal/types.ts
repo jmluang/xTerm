@@ -24,9 +24,16 @@ export type SessionMeta = {
   startedAt: number;
 };
 
+export type SessionTerminalHandle = {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  inputDisposable: { dispose(): void };
+};
+
 export type TerminalRefs = {
   terminalContainerRef: MutableRefObject<HTMLDivElement | null>;
-  terminalRef: MutableRefObject<HTMLDivElement | null>;
+  sessionViewportRefs: MutableRefObject<Map<string, HTMLDivElement>>;
+  sessionTerminals: MutableRefObject<Map<string, SessionTerminalHandle>>;
   terminalInstance: MutableRefObject<Terminal | null>;
   fitAddon: MutableRefObject<FitAddon | null>;
   activeSessionIdRef: MutableRefObject<string | null>;

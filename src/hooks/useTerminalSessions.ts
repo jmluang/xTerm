@@ -27,7 +27,8 @@ export function useTerminalSessions(params: {
   >({});
 
   const terminalContainerRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<HTMLDivElement>(null);
+  const sessionViewportRefs = useRef(new Map<string, HTMLDivElement>());
+  const sessionTerminals = useRef(new Map<string, { terminal: Terminal; fitAddon: FitAddon; inputDisposable: { dispose(): void } }>());
   const terminalInstance = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -45,7 +46,8 @@ export function useTerminalSessions(params: {
   const terminalRefs = useMemo<TerminalRefs>(
     () => ({
       terminalContainerRef,
-      terminalRef,
+      sessionViewportRefs,
+      sessionTerminals,
       terminalInstance,
       fitAddon,
       activeSessionIdRef,
@@ -88,7 +90,7 @@ export function useTerminalSessions(params: {
     runtimeRefs,
   });
 
-  useTerminalRuntime({
+  const { bindSessionTerminalRef } = useTerminalRuntime({
     isInTauri,
     sidebarOpen,
     themeMode,
@@ -124,7 +126,7 @@ export function useTerminalSessions(params: {
     setActiveSessionId,
     connectingHosts,
     terminalContainerRef,
-    terminalRef,
+    bindSessionTerminalRef,
     terminalInstance,
     sessionIndexById,
     connectToHost,

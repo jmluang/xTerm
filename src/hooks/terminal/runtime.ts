@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,7 +8,7 @@ import { getTerminalTheme, type TerminalThemeId } from "@/lib/terminalTheme";
 import type { TerminalOptionsState } from "@/lib/terminalOptions";
 import type { Session } from "@/types/models";
 import type { SessionRuntimeRefs, SetActiveSessionId, TerminalRefs } from "@/hooks/terminal/types";
-import { readSessionBuffer } from "@/hooks/terminal/sessionBuffer";
+import { takeSessionBuffer } from "@/hooks/terminal/sessionBuffer";
 import {
   markFirstTerminalReady,
   recordFitCall,
@@ -56,11 +56,38 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     terminalRefs,
     runtimeRefs,
   } = params;
-  const [terminalReady, setTerminalReady] = useState(false);
-  const pendingDisposeTimerRef = useRef<number | null>(null);
+
   const fitTimerRef = useRef<number | null>(null);
   const fitRafRef = useRef<number | null>(null);
   const lastSentPtySizeRef = useRef<PtySizeState | null>(null);
+  const bindSessionTerminalRefCache = useRef(new Map<string, (node: HTMLDivElement | null) => void>());
+  const didMarkFirstTerminalReadyRef = useRef(false);
+
+  const isInTauriRef = useRef(isInTauri);
+  const themeModeRef = useRef(themeMode);
+  const terminalThemeIdRef = useRef(terminalThemeId);
+  const terminalOptionsRef = useRef(terminalOptions);
+  const sessionsCountRef = useRef(sessions.length);
+
+  useEffect(() => {
+    isInTauriRef.current = isInTauri;
+  }, [isInTauri]);
+
+  useEffect(() => {
+    themeModeRef.current = themeMode;
+  }, [themeMode]);
+
+  useEffect(() => {
+    terminalThemeIdRef.current = terminalThemeId;
+  }, [terminalThemeId]);
+
+  useEffect(() => {
+    terminalOptionsRef.current = terminalOptions;
+  }, [terminalOptions]);
+
+  useEffect(() => {
+    sessionsCountRef.current = sessions.length;
+  }, [sessions.length]);
 
   function clearScheduledFit() {
     if (fitTimerRef.current !== null) {
@@ -73,42 +100,11 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
   }
 
-  function applyTerminalTheme() {
-    const term = terminalRefs.terminalInstance.current;
-    if (!term) return;
-    try {
-      const appearance = themeMode === "light" || themeMode === "dark" ? themeMode : resolvedTheme();
-      const cssBackground = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
-      const background = cssBackground || (appearance === "dark" ? "#0b0f16" : "#ffffff");
-      const nextTheme = getTerminalTheme(terminalThemeId, appearance, background);
-      term.options.theme = nextTheme;
-      const surfaceBg = nextTheme.background || background;
-      terminalRefs.terminalContainerRef.current?.style.setProperty("--xterm-surface-bg", surfaceBg);
-      terminalRefs.terminalRef.current?.style.setProperty("--xterm-surface-bg", surfaceBg);
-      term.refresh(0, term.rows - 1);
-    } catch {
-      // Ignore; renderer can be temporarily unavailable during init/dispose.
-    }
-  }
-
-  function applyTerminalOptions() {
-    const term = terminalRefs.terminalInstance.current;
-    if (!term) return;
-    try {
-      term.options.fontFamily = terminalOptions.fontFamily;
-      term.options.fontSize = terminalOptions.fontSize;
-      term.options.lineHeight = terminalOptions.lineHeight;
-      term.options.letterSpacing = terminalOptions.letterSpacing;
-      term.options.cursorStyle = terminalOptions.cursorStyle;
-      term.options.scrollback = terminalOptions.scrollback;
-      term.options.macOptionIsMeta = terminalOptions.macOptionIsMeta;
-      term.options.rightClickSelectsWord = terminalOptions.rightClickSelectsWord;
-      term.options.drawBoldTextInBrightColors = terminalOptions.drawBoldTextInBrightColors;
-      term.options.cursorBlink = sessions.length > 0 && terminalOptions.cursorBlink;
-      term.refresh(0, term.rows - 1);
-    } catch {
-      // Ignore option updates during init/dispose races.
-    }
+  function syncActiveTerminalHandle() {
+    const sessionId = terminalRefs.activeSessionIdRef.current;
+    const handle = sessionId ? terminalRefs.sessionTerminals.current.get(sessionId) ?? null : null;
+    terminalRefs.terminalInstance.current = handle?.terminal ?? null;
+    terminalRefs.fitAddon.current = handle?.fitAddon ?? null;
   }
 
   function safeFit(fit: FitAddon): boolean {
@@ -121,19 +117,66 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
   }
 
+  function applyTerminalTheme(sessionId?: string) {
+    const appearance =
+      themeModeRef.current === "light" || themeModeRef.current === "dark" ? themeModeRef.current : resolvedTheme();
+    const cssBackground = getComputedStyle(document.documentElement).getPropertyValue("--app-term-bg").trim();
+    const background = cssBackground || (appearance === "dark" ? "#0b0f16" : "#ffffff");
+    const nextTheme = getTerminalTheme(terminalThemeIdRef.current, appearance, background);
+    const surfaceBg = nextTheme.background || background;
+    terminalRefs.terminalContainerRef.current?.style.setProperty("--xterm-surface-bg", surfaceBg);
+
+    const sessionIds = sessionId ? [sessionId] : Array.from(terminalRefs.sessionTerminals.current.keys());
+    for (const id of sessionIds) {
+      const handle = terminalRefs.sessionTerminals.current.get(id);
+      if (!handle) continue;
+      try {
+        handle.terminal.options.theme = nextTheme;
+        terminalRefs.sessionViewportRefs.current.get(id)?.style.setProperty("--xterm-surface-bg", surfaceBg);
+        handle.terminal.refresh(0, handle.terminal.rows - 1);
+      } catch {
+        // Ignore theme updates during init/dispose races.
+      }
+    }
+  }
+
+  function applyTerminalOptions(sessionId?: string) {
+    const options = terminalOptionsRef.current;
+    const sessionIds = sessionId ? [sessionId] : Array.from(terminalRefs.sessionTerminals.current.keys());
+    for (const id of sessionIds) {
+      const handle = terminalRefs.sessionTerminals.current.get(id);
+      if (!handle) continue;
+      try {
+        handle.terminal.options.fontFamily = options.fontFamily;
+        handle.terminal.options.fontSize = options.fontSize;
+        handle.terminal.options.lineHeight = options.lineHeight;
+        handle.terminal.options.letterSpacing = options.letterSpacing;
+        handle.terminal.options.cursorStyle = options.cursorStyle;
+        handle.terminal.options.scrollback = options.scrollback;
+        handle.terminal.options.macOptionIsMeta = options.macOptionIsMeta;
+        handle.terminal.options.rightClickSelectsWord = options.rightClickSelectsWord;
+        handle.terminal.options.drawBoldTextInBrightColors = options.drawBoldTextInBrightColors;
+        handle.terminal.options.cursorBlink =
+          id === terminalRefs.activeSessionIdRef.current && sessionsCountRef.current > 0 && options.cursorBlink;
+        handle.terminal.refresh(0, handle.terminal.rows - 1);
+      } catch {
+        // Ignore option updates during init/dispose races.
+      }
+    }
+  }
+
   function fitAndResizeActivePty() {
-    const term = terminalRefs.terminalInstance.current;
-    const fit = terminalRefs.fitAddon.current;
     const sessionId = terminalRefs.activeSessionIdRef.current;
-    if (!term || !fit) return;
+    const handle = sessionId ? terminalRefs.sessionTerminals.current.get(sessionId) : null;
+    if (!sessionId || !handle) return;
 
     recordFitCall();
-    const fitOk = safeFit(fit);
+    const fitOk = safeFit(handle.fitAddon);
     if (!fitOk) return;
 
-    if (!sessionId || !isInTauri) return;
-    const nextCols = term.cols;
-    const nextRows = term.rows;
+    if (!isInTauriRef.current) return;
+    const nextCols = handle.terminal.cols;
+    const nextRows = handle.terminal.rows;
     const prev = lastSentPtySizeRef.current;
     if (prev && prev.sessionId === sessionId && prev.cols === nextCols && prev.rows === nextRows) return;
 
@@ -166,10 +209,136 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }, Math.max(0, delayMs));
   }
 
+  function createSessionTerminal(sessionId: string, node: HTMLDivElement) {
+    if (terminalRefs.sessionTerminals.current.has(sessionId)) return;
+
+    const options = terminalOptionsRef.current;
+    const term = new Terminal({
+      cursorBlink: sessionId === terminalRefs.activeSessionIdRef.current && sessionsCountRef.current > 0 && options.cursorBlink,
+      cursorInactiveStyle: "none",
+      cursorStyle: options.cursorStyle,
+      fontSize: options.fontSize,
+      fontFamily: options.fontFamily,
+      lineHeight: options.lineHeight,
+      letterSpacing: options.letterSpacing,
+      scrollback: options.scrollback,
+      macOptionIsMeta: options.macOptionIsMeta,
+      rightClickSelectsWord: options.rightClickSelectsWord,
+      drawBoldTextInBrightColors: options.drawBoldTextInBrightColors,
+      theme: { background: "transparent", foreground: "#e5e7eb" },
+    });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(node);
+    if (term.element) {
+      term.element.style.height = "100%";
+      term.element.style.boxSizing = "border-box";
+      term.element.style.padding = "0.5rem 0.75rem 0.75rem";
+    }
+
+    const inputDisposable = term.onData((data) => {
+      if (!isInTauriRef.current) return;
+      invoke("pty_write", { sessionId, data }).catch((error) => console.error("[pty] write error", error));
+    });
+
+    terminalRefs.sessionTerminals.current.set(sessionId, { terminal: term, fitAddon, inputDisposable });
+    syncActiveTerminalHandle();
+
+    if (!didMarkFirstTerminalReadyRef.current) {
+      didMarkFirstTerminalReadyRef.current = true;
+      markFirstTerminalReady();
+    }
+
+    applyTerminalTheme(sessionId);
+    applyTerminalOptions(sessionId);
+    safeFit(fitAddon);
+
+    const pendingText = takeSessionBuffer(runtimeRefs.sessionBuffers.current, sessionId);
+    if (pendingText) {
+      try {
+        term.write(pendingText, () => {
+          if (terminalRefs.activeSessionIdRef.current === sessionId) scheduleFitAndResize(0);
+        });
+      } catch (error) {
+        console.debug("[xterm] pending buffer flush skipped", error);
+      }
+    } else if (terminalRefs.activeSessionIdRef.current === sessionId) {
+      scheduleFitAndResize(0);
+    }
+  }
+
+  function disposeSessionTerminal(sessionId: string) {
+    const handle = terminalRefs.sessionTerminals.current.get(sessionId);
+    terminalRefs.sessionViewportRefs.current.delete(sessionId);
+    bindSessionTerminalRefCache.current.delete(sessionId);
+    if (!handle) {
+      syncActiveTerminalHandle();
+      return;
+    }
+
+    try {
+      handle.terminal.clearSelection();
+      handle.terminal.blur();
+    } catch {
+      // ignore
+    }
+
+    handle.inputDisposable.dispose();
+    try {
+      handle.terminal.dispose();
+    } catch {
+      // ignore
+    }
+
+    terminalRefs.sessionTerminals.current.delete(sessionId);
+    if (terminalRefs.activeSessionIdRef.current === sessionId) {
+      lastSentPtySizeRef.current = null;
+    }
+    syncActiveTerminalHandle();
+  }
+
+  function bindSessionTerminalRef(sessionId: string) {
+    const cached = bindSessionTerminalRefCache.current.get(sessionId);
+    if (cached) return cached;
+
+    const callback = (node: HTMLDivElement | null) => {
+      if (node) {
+        terminalRefs.sessionViewportRefs.current.set(sessionId, node);
+        createSessionTerminal(sessionId, node);
+      } else {
+        disposeSessionTerminal(sessionId);
+      }
+    };
+
+    bindSessionTerminalRefCache.current.set(sessionId, callback);
+    return callback;
+  }
+
   useEffect(() => {
     terminalRefs.activeSessionIdRef.current = activeSessionId;
     lastSentPtySizeRef.current = null;
-  }, [activeSessionId, terminalRefs.activeSessionIdRef]);
+    syncActiveTerminalHandle();
+    applyTerminalOptions();
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    const knownIds = new Set(sessions.map((session) => session.id));
+    for (const sessionId of Array.from(terminalRefs.sessionTerminals.current.keys())) {
+      if (!knownIds.has(sessionId)) {
+        disposeSessionTerminal(sessionId);
+      }
+    }
+  }, [sessions]);
+
+  useEffect(() => {
+    if (sessions.length === 0) return;
+    if (activeSessionId && sessions.some((session) => session.id === activeSessionId)) return;
+    setActiveSessionId(sessions[0].id);
+  }, [sessions, activeSessionId, setActiveSessionId]);
+
+  useEffect(() => {
+    sampleMemory(sessions.length);
+  }, [sessions.length]);
 
   useEffect(() => {
     applyTerminalTheme();
@@ -181,9 +350,9 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     applyTerminalOptions();
-    if (!terminalReady) return;
+    if (!activeSessionId) return;
     scheduleFitAndResize(20);
-  }, [terminalOptions, sessions.length, terminalReady]);
+  }, [terminalOptions, sessions.length, activeSessionId]);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -200,9 +369,9 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   }, []);
 
   useEffect(() => {
-    if (!terminalReady) return;
+    if (!activeSessionId) return;
     scheduleFitAndResize(20);
-  }, [sidebarOpen, terminalReady]);
+  }, [sidebarOpen, activeSessionId]);
 
   useEffect(() => {
     if (!isInTauri) return;
@@ -224,96 +393,10 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         // ignore
       }
     };
-  }, [isInTauri, terminalReady]);
+  }, [isInTauri, activeSessionId]);
 
   useEffect(() => {
-    if (sessions.length === 0) return;
-    if (activeSessionId && sessions.some((session) => session.id === activeSessionId)) return;
-    setActiveSessionId(sessions[0].id);
-  }, [sessions, activeSessionId, setActiveSessionId]);
-
-  useEffect(() => {
-    sampleMemory(sessions.length);
-  }, [sessions.length]);
-
-  useEffect(() => {
-    if (!terminalReady) return;
-    if (sessions.length !== 0) return;
-    const term = terminalRefs.terminalInstance.current;
-    if (!term) return;
-    term.clearSelection();
-    term.blur();
-    // Reset emulator state when the last session closes so DEC modes/focus tracking
-    // from a prior session don't leak into the next SSH connection.
-    term.reset();
-    applyTerminalTheme();
-    applyTerminalOptions();
-  }, [sessions.length, terminalReady, terminalRefs.terminalInstance]);
-
-  useEffect(() => {
-    if (pendingDisposeTimerRef.current) {
-      window.clearTimeout(pendingDisposeTimerRef.current);
-      pendingDisposeTimerRef.current = null;
-    }
-    if (!terminalRefs.terminalRef.current || terminalRefs.terminalInstance.current) return;
-
-    const term = new Terminal({
-      cursorBlink: false,
-      cursorInactiveStyle: "none",
-      cursorStyle: terminalOptions.cursorStyle,
-      fontSize: terminalOptions.fontSize,
-      fontFamily: terminalOptions.fontFamily,
-      lineHeight: terminalOptions.lineHeight,
-      letterSpacing: terminalOptions.letterSpacing,
-      scrollback: terminalOptions.scrollback,
-      macOptionIsMeta: terminalOptions.macOptionIsMeta,
-      rightClickSelectsWord: terminalOptions.rightClickSelectsWord,
-      drawBoldTextInBrightColors: terminalOptions.drawBoldTextInBrightColors,
-      theme: { background: "transparent", foreground: "#e5e7eb" },
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(terminalRefs.terminalRef.current);
-    safeFit(fit);
-    terminalRefs.terminalInstance.current = term;
-    terminalRefs.fitAddon.current = fit;
-    setTerminalReady(true);
-    markFirstTerminalReady();
-    applyTerminalTheme();
-    applyTerminalOptions();
-    scheduleFitAndResize(0);
-
-    const onData = term.onData((data) => {
-      const sessionId = terminalRefs.activeSessionIdRef.current;
-      if (!sessionId || !isInTauri) return;
-      invoke("pty_write", { sessionId, data }).catch((error) => console.error("[pty] write error", error));
-    });
-    const onResize = () => scheduleFitAndResize(30);
-    window.addEventListener("resize", onResize);
-
-    return () => {
-      pendingDisposeTimerRef.current = window.setTimeout(() => {
-        clearScheduledFit();
-        onData.dispose();
-        window.removeEventListener("resize", onResize);
-        try {
-          term.dispose();
-        } catch {
-          // ignore
-        }
-        if (terminalRefs.terminalInstance.current === term) {
-          terminalRefs.terminalInstance.current = null;
-          terminalRefs.fitAddon.current = null;
-        }
-        lastSentPtySizeRef.current = null;
-        setTerminalReady(false);
-        pendingDisposeTimerRef.current = null;
-      }, 0);
-    };
-  }, [isInTauri]);
-
-  useEffect(() => {
-    const element = terminalRefs.terminalContainerRef.current ?? terminalRefs.terminalRef.current;
+    const element = terminalRefs.terminalContainerRef.current;
     if (!element) return;
 
     const observer = new ResizeObserver(() => {
@@ -324,63 +407,44 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     return () => {
       observer.disconnect();
     };
-  }, [isInTauri, terminalReady]);
+  }, [isInTauri, activeSessionId]);
 
   useEffect(() => {
-    const term = terminalRefs.terminalInstance.current;
-    if (!terminalReady || !term) return;
-    if (!activeSessionId) return;
-    let cancelled = false;
+    if (!activeSessionId) {
+      syncActiveTerminalHandle();
+      return;
+    }
 
+    const start = performance.now();
     const raf = window.requestAnimationFrame(() => {
-      if (cancelled) return;
-      const start = performance.now();
-      try {
-        // `clear()` preserves the current prompt line and terminal modes in xterm.js.
-        // We need a full reset when reusing one xterm instance across sessions,
-        // otherwise prompt text and DEC modes (eg focus tracking) can leak.
-        term.reset();
-      } catch {
-        return;
-      }
-
-      applyTerminalTheme();
+      syncActiveTerminalHandle();
       applyTerminalOptions();
-      try {
-        term.focus();
-      } catch (error) {
-        console.debug("[xterm] focus skipped before session replay", error);
-      }
-      const text = readSessionBuffer(runtimeRefs.sessionBuffers.current, activeSessionId);
-
-      const finishSwitch = () => {
-        if (cancelled) return;
-        scheduleFitAndResize(0);
-        window.requestAnimationFrame(() => {
-          if (cancelled) return;
-          try {
-            term.focus();
-          } catch (error) {
-            console.debug("[xterm] focus skipped after session switch", error);
-          }
-          recordTabSwitchLatency(performance.now() - start);
-        });
-      };
-
-      try {
-        if (text) {
-          term.write(text, finishSwitch);
-        } else {
-          finishSwitch();
+      scheduleFitAndResize(0);
+      window.requestAnimationFrame(() => {
+        try {
+          terminalRefs.terminalInstance.current?.focus();
+        } catch (error) {
+          console.debug("[xterm] focus skipped after session switch", error);
         }
-      } catch (error) {
-        console.debug("[xterm] write skipped after session switch", error);
-      }
+        recordTabSwitchLatency(performance.now() - start);
+      });
     });
 
     return () => {
-      cancelled = true;
       window.cancelAnimationFrame(raf);
     };
-  }, [activeSessionId, runtimeRefs.sessionBuffers, terminalReady]);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    return () => {
+      clearScheduledFit();
+      for (const sessionId of Array.from(terminalRefs.sessionTerminals.current.keys())) {
+        disposeSessionTerminal(sessionId);
+      }
+    };
+  }, []);
+
+  return {
+    bindSessionTerminalRef,
+  };
 }

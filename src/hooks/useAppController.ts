@@ -247,7 +247,7 @@ export function useAppController() {
     setFormData: hostsMgr.setFormData,
     isInTauri,
     terminalContainerRef: terminal.terminalContainerRef,
-    terminalRef: terminal.terminalRef,
+    bindSessionTerminalRef: terminal.bindSessionTerminalRef,
     terminalInstance: terminal.terminalInstance,
     themeMode,
     setThemeModeState,

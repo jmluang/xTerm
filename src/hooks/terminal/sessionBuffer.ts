@@ -73,3 +73,9 @@ export function readSessionBuffer(store: Map<string, SessionBuffer>, sessionId: 
   buffer.cachedText = text;
   return text;
 }
+
+export function takeSessionBuffer(store: Map<string, SessionBuffer>, sessionId: string): string {
+  const text = readSessionBuffer(store, sessionId);
+  store.delete(sessionId);
+  return text;
+}
