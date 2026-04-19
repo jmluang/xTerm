@@ -6,11 +6,33 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
+  prepare_release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Reset existing release to draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --draft=true
+          else
+            echo "No existing release for ${GITHUB_REF_NAME}"
+          fi
+
   build:
+    needs: prepare_release
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     strategy:
