@@ -3,7 +3,7 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(PtyState::default())
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -21,7 +21,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    #[cfg(not(desktop))]
+    let builder = builder;
+
+    builder
         .invoke_handler(tauri::generate_handler![
             crate::host_store::hosts_load,
             crate::host_store::hosts_save,
