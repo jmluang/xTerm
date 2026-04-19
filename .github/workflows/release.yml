@@ -118,7 +118,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
-          tauriScript: npm run tauri --
+          tauriScript: npm run tauri
           args: --target ${{ matrix.target }}
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
