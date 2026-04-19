@@ -14,7 +14,7 @@ In scope:
 
 - Register and configure Tauri v2 official updater support.
 - Add an About entry point in the existing app UI.
-- Add a manual "Check for Updates" action.
+- Add a manual "Check for Updates" action on macOS builds.
 - Support updater states: idle, checking, up to date, update available, downloading, installing, error.
 - Publish updater artifacts and metadata to GitHub Releases.
 - Keep the implementation compatible with future Apple code signing / notarization work.
@@ -29,10 +29,10 @@ Out of scope for this phase:
 
 ## Existing Context
 
-- The app already uses Tauri 2.x in [src-tauri/Cargo.toml](/Users/luang/Downloads/xTermius/xtermius/src-tauri/Cargo.toml) and [`@tauri-apps/api`](https://www.npmjs.com/package/@tauri-apps/api) in [package.json](/Users/luang/Downloads/xTermius/xtermius/package.json).
+- The app already uses Tauri 2.x in [src-tauri/Cargo.toml](../../../src-tauri/Cargo.toml) and [`@tauri-apps/api`](https://www.npmjs.com/package/@tauri-apps/api) in [package.json](../../../package.json).
 - The app does not currently include `tauri-plugin-updater` or `@tauri-apps/plugin-updater`.
-- Tauri capabilities currently grant `core`, `shell`, and `dialog` permissions only in [src-tauri/capabilities/default.json](/Users/luang/Downloads/xTermius/xtermius/src-tauri/capabilities/default.json).
-- The current GitHub workflow in [release.yml](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) builds DMGs and uploads them to a GitHub Release, but it does not produce updater metadata or signed updater artifacts.
+- Tauri capabilities currently grant `core`, `shell`, and `dialog` permissions only in [src-tauri/capabilities/default.json](../../../src-tauri/capabilities/default.json).
+- The current GitHub workflow in [release.yml](../../../.github/workflows/release.yml) builds DMGs and uploads them to a GitHub Release, but it does not produce updater metadata or signed updater artifacts.
 - There is no existing About surface in the frontend.
 
 ## Options Considered
@@ -97,12 +97,14 @@ The About section should show:
 - app name
 - current version
 - release channel label: `stable`
-- update status text
-- `Check for Updates` button
-- when an update is available:
+- update status text on macOS builds
+- `Check for Updates` button on macOS builds
+- when an update is available on macOS builds:
   - target version
   - optional release notes snippet
   - `Download and Install` button
+
+On non-macOS builds in phase 1, the About section shows version and channel information only. It does not expose updater actions.
 
 Suggested state progression:
 
@@ -112,7 +114,7 @@ Idle -> Checking -> UpToDate
                  -> Error
 ```
 
-ASCII wireframe:
+ASCII wireframe (version numbers are illustrative only; actual values come from `package.json` / `tauri.conf.json` at build time):
 
 ```text
 +--------------------------------------------------+
@@ -121,14 +123,14 @@ ASCII wireframe:
 |  [Terminal] [Sync] [Import] [About]              |
 |                                                  |
 |  About xTermius                                  |
-|  Version: 0.2.0                                  |
+|  Version: <current>                              |
 |  Channel: stable                                 |
 |                                                  |
 |  Status: Up to date                              |
 |  [Check for Updates]                             |
 |                                                  |
 |  If update exists:                               |
-|  New version: 0.2.1                              |
+|  New version: <target>                           |
 |  Notes: Fix terminal session restore...          |
 |  [Download and Install]                          |
 +--------------------------------------------------+
@@ -155,6 +157,7 @@ Primary frontend responsibilities:
 - call `downloadAndInstall()` when the user confirms
 - map raw updater errors into concise UI copy
 - call a dedicated relaunch step after a successful install when the updater leaves restart control to the app
+- gate updater UI and updater API usage behind a desktop-macOS platform check in phase 1
 
 ### Rust / Tauri
 
@@ -187,7 +190,7 @@ Add `@tauri-apps/plugin-updater`.
 
 ### Tauri config
 
-Update [src-tauri/tauri.conf.json](/Users/luang/Downloads/xTermius/xtermius/src-tauri/tauri.conf.json):
+Update [src-tauri/tauri.conf.json](../../../src-tauri/tauri.conf.json):
 
 - enable `bundle.createUpdaterArtifacts`
 - add `plugins.updater.pubkey`
@@ -221,6 +224,17 @@ Expected shape:
 
 Add `updater:default` to the main capability.
 
+### `latest.json` manifest shape
+
+The updater pipeline must publish a static `latest.json` asset to GitHub Releases using the official Tauri GitHub release flow. The app consumes that manifest as a release artifact and verifies its presence during release validation rather than defining a custom manifest-generation format in phase 1.
+
+The manifest must resolve to updater artifacts, not DMGs. During release validation, confirm that:
+
+- `latest.json` exists on the GitHub Release
+- it contains macOS target entries for both `darwin-aarch64` and `darwin-x86_64`
+- each entry points at the updater bundle for that target
+- each entry references the matching updater signature
+
 ## Release Pipeline Design
 
 The GitHub workflow must inject updater signing secrets during release builds:
@@ -237,9 +251,10 @@ Release build requirements:
 
 Implementation path:
 
-- Migrate the release workflow to `tauri-apps/tauri-action`.
+- Migrate the release workflow to `tauri-apps/tauri-action`, keeping the updater pipeline aligned with the official Tauri GitHub release flow.
 - Keep the existing version-sync step before the action runs so tag-driven versioning still works.
 - Preserve the current macOS Intel and Apple Silicon matrix targets in the migrated workflow.
+- Treat `latest.json`, updater bundles, and `.sig` files as required outputs of the official updater release pipeline, and add workflow/release verification that those assets are present on the final GitHub Release.
 
 The workflow must continue to publish macOS Intel and Apple Silicon artifacts because updater resolution is target-specific.
 
@@ -329,6 +344,8 @@ Do not surface raw stack traces in the primary About UI. Log detailed errors to 
 This phase is intentionally acceptable-but-not-perfect for macOS distribution. Users may still have to explicitly allow direct-download builds because ad-hoc signing is not notarization.
 
 That trade-off is acceptable because the immediate goal is to establish a working updater pipeline and in-app update UX without requiring paid Apple infrastructure. Future work can replace ad-hoc signing with Developer ID + notarization without changing the app-side updater architecture.
+
+Platform coverage: phase 1 enables in-app updater actions on macOS builds only. The release matrix only builds macOS `aarch64` and `x86_64` targets, so the shipped updater manifest is validated against macOS entries only. Windows/Linux builds keep the About surface but do not expose updater actions until their artifacts are added to the release matrix. A visible `no matching platform artifact` error on non-macOS builds is treated as a configuration regression, not expected behavior.
 
 ## Implementation Outline
 
