@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { ChevronDown, Minus, Plus, X } from "lucide-react";
+import packageJson from "../../../package.json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { resolveWebdavHostsDbUrl } from "@/lib/webdav";
@@ -13,7 +14,7 @@ import {
 } from "@/lib/terminalOptions";
 import type { ThemeMode } from "@/lib/theme";
 import type { Settings, SshConfigImportCandidate } from "@/types/models";
-import type { SettingsSection } from "@/types/settings";
+import type { SettingsSection, UpdaterStatus, UpdaterViewState } from "@/types/settings";
 
 function Toggle(props: { checked: boolean; onChange: (next: boolean) => void; ariaLabel: string }) {
   const { checked, onChange, ariaLabel } = props;
@@ -58,6 +59,7 @@ export function SettingsPanel(props: {
   syncBusy: null | "pull" | "push" | "save";
   syncNotice: null | { kind: "ok" | "err"; text: string };
   isInTauri: boolean;
+  updater?: UpdaterViewState;
   onSaveSettings: () => Promise<void>;
   onPull: () => Promise<void>;
   onPush: () => Promise<void>;
@@ -86,6 +88,7 @@ export function SettingsPanel(props: {
     syncBusy,
     syncNotice,
     isInTauri,
+    updater,
     onSaveSettings,
     onPull,
     onPush,
@@ -100,6 +103,18 @@ export function SettingsPanel(props: {
   const hostMetricsDockRef = useRef<HTMLDivElement | null>(null);
   const [highlightHostMetricsDock, setHighlightHostMetricsDock] = useState(false);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+  const about = updater ?? {
+    appName: "xTermius",
+    channel: "stable" as const,
+    currentVersion: packageJson.version,
+    enabled: false,
+    status: "idle" as UpdaterStatus,
+    error: null,
+    availableVersion: null,
+    releaseNotes: null,
+    checkForUpdates: async () => {},
+    downloadAndInstall: async () => {},
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -183,6 +198,28 @@ export function SettingsPanel(props: {
     [terminalThemeId, appearance]
   );
 
+  const updaterStatusText = useMemo(() => {
+    switch (about.status) {
+      case "checking":
+        return "Checking for updates...";
+      case "available":
+        return about.availableVersion ? `Update available: ${about.availableVersion}` : "Update available";
+      case "up-to-date":
+        return "You're up to date.";
+      case "downloading":
+        return "Downloading update...";
+      case "installing":
+        return "Installing update...";
+      case "restart-required":
+        return "Restart required to finish applying the update.";
+      case "error":
+        return about.error ?? "Unable to check for updates right now.";
+      case "idle":
+      default:
+        return "Ready to check for updates.";
+    }
+  }, [about]);
+
   function patchTerminalOptions(patch: Partial<TerminalOptionsState>) {
     setTerminalOptions((prev) => sanitizeTerminalOptions({ ...prev, ...patch }));
   }
@@ -236,6 +273,7 @@ export function SettingsPanel(props: {
                   { id: "terminal", label: "Terminal" },
                   { id: "sync", label: "Sync" },
                   { id: "import", label: "Import SSH Config" },
+                  { id: "about", label: "About" },
                 ].map((section) => (
                   <button
                     key={section.id}
@@ -731,6 +769,88 @@ export function SettingsPanel(props: {
                     </div>
                   </>
                 )}
+              </div>
+            ) : null}
+
+            {activeSection === "about" ? (
+              <div className="mx-auto max-w-4xl grid gap-4">
+                <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
+                  <div>
+                    <div className="text-lg font-semibold">About</div>
+                    <div className="text-xs text-muted-foreground mt-1">Build information and update status.</div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-xl border border-border bg-background/40 px-4 py-3">
+                      <div className="text-xs text-muted-foreground">App</div>
+                      <div className="text-sm font-medium mt-1">{about.appName}</div>
+                    </div>
+                    <div className="rounded-xl border border-border bg-background/40 px-4 py-3">
+                      <div className="text-xs text-muted-foreground">Version</div>
+                      <div className="text-sm font-medium mt-1">{about.currentVersion}</div>
+                    </div>
+                    <div className="rounded-xl border border-border bg-background/40 px-4 py-3">
+                      <div className="text-xs text-muted-foreground">Channel</div>
+                      <div className="text-sm font-medium mt-1">{about.channel}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {about.enabled ? (
+                  <div className="rounded-2xl border border-border bg-card/80 p-5 grid gap-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium">Software Update</div>
+                        <div className="text-xs text-muted-foreground mt-1">macOS desktop builds can check and install updates here.</div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        disabled={about.status === "checking" || about.status === "downloading" || about.status === "installing"}
+                        onClick={() => {
+                          void about.checkForUpdates();
+                        }}
+                      >
+                        {about.status === "checking" ? "Checking..." : "Check for Updates"}
+                      </Button>
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-background/40 px-4 py-3 grid gap-2">
+                      <div className="text-xs text-muted-foreground">Status</div>
+                      <div className="text-sm">{updaterStatusText}</div>
+                    </div>
+
+                    {about.availableVersion ? (
+                      <div className="rounded-xl border border-border bg-background/40 px-4 py-3 grid gap-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium">Version {about.availableVersion}</div>
+                            <div className="text-xs text-muted-foreground mt-1">A newer release is ready to install.</div>
+                          </div>
+                          <Button
+                            variant="default"
+                            disabled={about.status === "checking" || about.status === "downloading" || about.status === "installing"}
+                            onClick={() => {
+                              void about.downloadAndInstall();
+                            }}
+                          >
+                            {about.status === "downloading" || about.status === "installing"
+                              ? "Installing..."
+                              : "Download and Install"}
+                          </Button>
+                        </div>
+
+                        {about.releaseNotes ? (
+                          <div className="grid gap-2">
+                            <div className="text-xs text-muted-foreground">Release Notes</div>
+                            <pre className="whitespace-pre-wrap break-words rounded-lg border border-border bg-background/60 p-3 text-xs leading-5 text-foreground/80">
+                              {about.releaseNotes}
+                            </pre>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             </main>

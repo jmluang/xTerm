@@ -26,6 +26,7 @@ import {
 } from "@/lib/settingsEvents";
 import { getMetricsDockEnabled, setMetricsDockEnabled } from "@/lib/metricsDock";
 import { useHostsManager } from "@/hooks/useHostsManager";
+import { useUpdaterController } from "@/hooks/useUpdaterController";
 import { useTerminalSessions } from "@/hooks/useTerminalSessions";
 import { useWebdavSync } from "@/hooks/useWebdavSync";
 import { useHostInsights } from "@/hooks/useHostInsights";
@@ -68,6 +69,7 @@ export function useAppController() {
     sessions: terminal.sessions,
     activeSessionId: terminal.activeSessionId,
   });
+  const updater = useUpdaterController();
 
   useEffect(() => {
     void hostsMgr.loadHosts();
@@ -257,6 +259,7 @@ export function useAppController() {
     setTerminalOptionsState,
     metricsDockEnabled,
     setMetricsDockEnabledState,
+    updater,
     sidebarOpen,
     setSidebarOpen,
     sortedHosts: hostsMgr.sortedHosts,

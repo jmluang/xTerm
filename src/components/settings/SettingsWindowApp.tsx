@@ -21,6 +21,7 @@ import {
   type SettingsThemeModePayload,
 } from "@/lib/settingsEvents";
 import { getMetricsDockEnabled, setMetricsDockEnabled } from "@/lib/metricsDock";
+import { useUpdaterController } from "@/hooks/useUpdaterController";
 import { useWebdavSync } from "@/hooks/useWebdavSync";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import type { Host, SshConfigImportCandidate } from "@/types/models";
@@ -28,7 +29,7 @@ import type { SettingsSection } from "@/types/settings";
 
 function readInitialSection(): SettingsSection {
   const section = new URLSearchParams(window.location.search).get("section");
-  if (section === "terminal" || section === "sync" || section === "import") return section;
+  if (section === "terminal" || section === "sync" || section === "import" || section === "about") return section;
   return "terminal";
 }
 
@@ -51,6 +52,7 @@ export function SettingsWindowApp() {
   const [sshImportLoading, setSshImportLoading] = useState(false);
   const [sshImportBusy, setSshImportBusy] = useState(false);
   const [sshImportCandidates, setSshImportCandidates] = useState<SshConfigImportCandidate[]>([]);
+  const updater = useUpdaterController();
 
   const hostsRef = useRef<Host[]>([]);
   async function loadHosts() {
@@ -224,7 +226,7 @@ export function SettingsWindowApp() {
         unlisten = await current.listen<SettingsNavigatePayload>(SETTINGS_NAVIGATE_EVENT, (event) => {
           const section = event.payload?.section;
           const target = event.payload?.target;
-          if (section === "terminal" || section === "sync" || section === "import") {
+          if (section === "terminal" || section === "sync" || section === "import" || section === "about") {
             setSettingsSection(section);
           }
           setSettingsScrollTarget(target === "host-metrics-dock" ? target : null);
@@ -269,6 +271,7 @@ export function SettingsWindowApp() {
         syncBusy={webdav.syncBusy}
         syncNotice={webdav.syncNotice}
         isInTauri={isInTauri}
+        updater={updater}
         onSaveSettings={webdav.saveWebdavSettings}
         onPull={webdav.doWebdavPull}
         onPush={webdav.doWebdavPush}
