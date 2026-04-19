@@ -67,6 +67,7 @@ jobs:
         run: npm ci
 
       - name: Build and publish Tauri release
+        if: env.RELEASE_TAG != ''
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
