@@ -77,10 +77,22 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "xTermius ${{ env.RELEASE_TAG }}"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
           tauriScript: npm run tauri --
           args: --target ${{ matrix.target }}
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
+
+  finalize_release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
