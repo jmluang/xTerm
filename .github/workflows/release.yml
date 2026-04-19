@@ -17,22 +17,32 @@ jobs:
   prepare_release:
     if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v'
     runs-on: ubuntu-latest
+    outputs:
+      release_state: ${{ steps.inspect_release.outputs.state }}
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Reset existing release to draft
+      - name: Inspect existing release state
+        id: inspect_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --draft=true
+          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
+              echo "state=draft" >> "$GITHUB_OUTPUT"
+              echo "Release state: draft"
+            else
+              echo "state=published" >> "$GITHUB_OUTPUT"
+              echo "Release state: published"
+            fi
           else
-            echo "No existing release for ${GITHUB_REF_NAME}"
+            echo "state=missing" >> "$GITHUB_OUTPUT"
+            echo "Release state: missing"
           fi
 
   build:
     needs: prepare_release
-    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v'
+    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v' && needs.prepare_release.outputs.release_state != 'published'
     permissions:
       contents: write
     strategy:
@@ -112,8 +122,10 @@ jobs:
           uploadUpdaterSignatures: true
 
   finalize_release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v'
+    needs:
+      - prepare_release
+      - build
+    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v' && needs.prepare_release.outputs.release_state != 'published' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
