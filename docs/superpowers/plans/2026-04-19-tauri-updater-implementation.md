@@ -10,6 +10,31 @@
 
 ---
 
+## File Map
+
+- Modify: `src-tauri/src/app.rs`
+  - register updater/process plugins without disturbing the existing vibrancy setup.
+- Modify: `src-tauri/Cargo.toml`
+  - add desktop updater support and process restart support.
+- Modify: `src-tauri/tauri.conf.json`
+  - enable updater artifacts, ad-hoc macOS signing, updater endpoints, and the real public key.
+- Modify: `src-tauri/capabilities/default.json`
+  - expose `process:default` and `updater:default`.
+- Modify: `package.json` / `package-lock.json`
+  - add updater and process guest bindings.
+- Create: `src/hooks/useUpdaterController.ts`
+  - own updater status, version lookup, macOS gating, and install/relaunch behavior.
+- Modify: `src/types/settings.ts`
+  - add the `about` section union member.
+- Modify: `src/hooks/useAppController.ts`
+  - pass updater state into the shared settings surface outside Tauri.
+- Modify: `src/components/settings/SettingsWindowApp.tsx`
+  - allow `about` in section parsing/listeners and pass updater state through.
+- Modify: `src/components/settings/SettingsPanel.tsx`
+  - render the About navigation item and macOS-only updater UI.
+- Modify: `.github/workflows/release.yml`
+  - switch release publication to `tauri-apps/tauri-action`.
+
 ### Task 1: Configure Native Updater and Restart Plugins
 
 **Files:**
@@ -187,6 +212,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import packageJson from "../../package.json";
 
 type UpdaterStatus =
   | "idle"
@@ -201,14 +227,14 @@ type UpdaterStatus =
 export function useUpdaterController({ isInTauri }: { isInTauri: boolean }) {
   const supportsUpdaterActions =
     isInTauri && typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
-  const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>(packageJson.version);
   const [status, setStatus] = useState<UpdaterStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
 
   useEffect(() => {
     if (!isInTauri) return;
-    void getVersion().then(setCurrentVersion).catch(() => setCurrentVersion(null));
+    void getVersion().then(setCurrentVersion).catch(() => setCurrentVersion(packageJson.version));
   }, [isInTauri]);
 
   async function onCheckForUpdates() {
@@ -386,21 +412,21 @@ git commit -m "feat: add settings about updater flow"
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
-- Test: `rg -n "tauri-apps/tauri-action@v0|TAURI_SIGNING_PRIVATE_KEY|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml`
+- Test: `rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|uploadUpdaterJson|uploadUpdaterSignatures|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml`
 
 - [ ] **Step 1: Write the failing workflow assertion**
 
 Confirm the current workflow is still missing the official updater release path:
 
 ```bash
-rg -n "tauri-apps/tauri-action@v0|TAURI_SIGNING_PRIVATE_KEY|latest.json" .github/workflows/release.yml
+rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|latest.json" .github/workflows/release.yml
 ```
 
 Expected: FAIL with no matches.
 
 - [ ] **Step 2: Replace the two-job DMG upload flow with a single updater-aware publish job**
 
-Rewrite [`.github/workflows/release.yml`](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) around `tauri-apps/tauri-action@v0`, while preserving the current tag trigger, version-sync step, and dual macOS targets:
+Rewrite [`.github/workflows/release.yml`](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) around `tauri-apps/tauri-action@v1`, while preserving the current tag trigger, version-sync step, and dual macOS targets:
 
 ```yaml
 name: Release
@@ -461,18 +487,21 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "xTermius v__VERSION__"
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "xTermius ${{ env.RELEASE_TAG }}"
+          releaseDraft: false
           prerelease: false
+          generateReleaseNotes: true
+          tauriScript: npm run tauri --
           args: --target ${{ matrix.target }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
 ```
 
 This removes the old `upload-artifact` + `ncipollo/release-action` path entirely. `tauri-action` should own both build and release publication.
@@ -482,10 +511,10 @@ This removes the old `upload-artifact` + `ncipollo/release-action` path entirely
 Run:
 
 ```bash
-rg -n "tauri-apps/tauri-action@v0|TAURI_SIGNING_PRIVATE_KEY|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml
+rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|uploadUpdaterJson|uploadUpdaterSignatures|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml
 ```
 
-Expected: PASS with hits for the action, signing secrets, version-sync step, and both macOS targets.
+Expected: PASS with hits for the action, signing secrets, updater JSON/signature uploads, version-sync step, and both macOS targets.
 
 - [ ] **Step 4: Commit the release migration**
 
@@ -544,7 +573,7 @@ git push origin v0.1.1-updater-test
 Expected on GitHub Actions / Releases:
 
 ```text
-- a draft release for v0.1.1-updater-test exists
+- a release for v0.1.1-updater-test exists
 - latest.json is attached
 - both darwin targets publish updater bundles
 - each updater bundle has a matching .sig
