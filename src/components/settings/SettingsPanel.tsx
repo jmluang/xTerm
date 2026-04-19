@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { ChevronDown, Minus, Plus, X } from "lucide-react";
-import packageJson from "../../../package.json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { resolveWebdavHostsDbUrl } from "@/lib/webdav";
@@ -14,7 +13,7 @@ import {
 } from "@/lib/terminalOptions";
 import type { ThemeMode } from "@/lib/theme";
 import type { Settings, SshConfigImportCandidate } from "@/types/models";
-import type { SettingsSection, UpdaterStatus, UpdaterViewState } from "@/types/settings";
+import type { SettingsSection, UpdaterViewState } from "@/types/settings";
 
 function Toggle(props: { checked: boolean; onChange: (next: boolean) => void; ariaLabel: string }) {
   const { checked, onChange, ariaLabel } = props;
@@ -59,7 +58,7 @@ export function SettingsPanel(props: {
   syncBusy: null | "pull" | "push" | "save";
   syncNotice: null | { kind: "ok" | "err"; text: string };
   isInTauri: boolean;
-  updater?: UpdaterViewState;
+  updater: UpdaterViewState;
   onSaveSettings: () => Promise<void>;
   onPull: () => Promise<void>;
   onPush: () => Promise<void>;
@@ -103,18 +102,7 @@ export function SettingsPanel(props: {
   const hostMetricsDockRef = useRef<HTMLDivElement | null>(null);
   const [highlightHostMetricsDock, setHighlightHostMetricsDock] = useState(false);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
-  const about = updater ?? {
-    appName: "xTermius",
-    channel: "stable" as const,
-    currentVersion: packageJson.version,
-    enabled: false,
-    status: "idle" as UpdaterStatus,
-    error: null,
-    availableVersion: null,
-    releaseNotes: null,
-    checkForUpdates: async () => {},
-    downloadAndInstall: async () => {},
-  };
+  const about = updater;
 
   useEffect(() => {
     if (!open) return;
@@ -197,28 +185,6 @@ export function SettingsPanel(props: {
     () => getTerminalTheme(terminalThemeId, appearance, appearance === "dark" ? "#0f1112" : "#ffffff"),
     [terminalThemeId, appearance]
   );
-
-  const updaterStatusText = useMemo(() => {
-    switch (about.status) {
-      case "checking":
-        return "Checking for updates...";
-      case "available":
-        return about.availableVersion ? `Update available: ${about.availableVersion}` : "Update available";
-      case "up-to-date":
-        return "You're up to date.";
-      case "downloading":
-        return "Downloading update...";
-      case "installing":
-        return "Installing update...";
-      case "restart-required":
-        return "Restart required to finish applying the update.";
-      case "error":
-        return about.error ?? "Unable to check for updates right now.";
-      case "idle":
-      default:
-        return "Ready to check for updates.";
-    }
-  }, [about]);
 
   function patchTerminalOptions(patch: Partial<TerminalOptionsState>) {
     setTerminalOptions((prev) => sanitizeTerminalOptions({ ...prev, ...patch }));
@@ -816,7 +782,7 @@ export function SettingsPanel(props: {
 
                     <div className="rounded-xl border border-border bg-background/40 px-4 py-3 grid gap-2">
                       <div className="text-xs text-muted-foreground">Status</div>
-                      <div className="text-sm">{updaterStatusText}</div>
+                      <div className="text-sm">{about.statusText}</div>
                     </div>
 
                     {about.availableVersion ? (

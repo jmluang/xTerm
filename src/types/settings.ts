@@ -16,6 +16,7 @@ export type UpdaterViewState = {
   currentVersion: string;
   enabled: boolean;
   status: UpdaterStatus;
+  statusText: string;
   error: string | null;
   availableVersion: string | null;
   releaseNotes: string | null;

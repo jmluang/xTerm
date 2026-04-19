@@ -1,33 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import packageJson from "../../package.json";
 import type { UpdaterStatus, UpdaterViewState } from "@/types/settings";
 
 const APP_NAME = "xTermius";
 const FALLBACK_VERSION = packageJson.version;
 
-type UpdaterModule = {
-  check: () => Promise<PendingUpdate | null>;
-};
-
-type ProcessModule = {
-  relaunch: () => Promise<void>;
-};
-
-type PendingUpdate = {
-  version: string;
-  body?: string | null;
-  downloadAndInstall: (onEvent?: (event: DownloadEvent) => void) => Promise<void>;
-};
-
 type DownloadEvent =
   | { event: "Started"; data: { contentLength?: number } }
   | { event: "Progress"; data: { chunkLength?: number } }
   | { event: "Finished" };
 
+type UpdateMetadata = {
+  rid: number;
+  version: string;
+  body?: string | null;
+};
+
 type LoadedUpdate = {
+  rid: number;
   version: string;
   releaseNotes: string | null;
-  downloadAndInstall: (onEvent?: (event: DownloadEvent) => void) => Promise<void>;
 };
 
 function isTauriRuntime() {
@@ -41,12 +35,28 @@ function isMacPlatform() {
   return /Mac/i.test(navigator.userAgent);
 }
 
-async function loadUpdaterModule() {
-  return Function('return import("@tauri-apps/plugin-updater")')() as Promise<UpdaterModule>;
+async function checkForUpdate() {
+  const metadata = await invoke<UpdateMetadata | null>("plugin:updater|check");
+  return metadata;
 }
 
-async function loadProcessModule() {
-  return Function('return import("@tauri-apps/plugin-process")')() as Promise<ProcessModule>;
+async function downloadAndInstallUpdate(
+  update: LoadedUpdate,
+  onEvent?: (event: DownloadEvent) => void
+) {
+  const channel = new Channel<DownloadEvent>();
+  if (onEvent) {
+    channel.onmessage = onEvent;
+  }
+
+  await invoke("plugin:updater|download_and_install", {
+    onEvent: channel,
+    rid: update.rid,
+  });
+}
+
+async function relaunchApp() {
+  await invoke("plugin:process|restart");
 }
 
 export function useUpdaterController(): UpdaterViewState {
@@ -67,7 +77,6 @@ export function useUpdaterController(): UpdaterViewState {
       }
 
       try {
-        const { getVersion } = await import("@tauri-apps/api/app");
         const version = await getVersion();
         if (!cancelled && version) {
           setCurrentVersion(version);
@@ -91,8 +100,7 @@ export function useUpdaterController(): UpdaterViewState {
     setError(null);
 
     try {
-      const { check } = await loadUpdaterModule();
-      const update = await check();
+      const update = await checkForUpdate();
       if (!update) {
         setLoadedUpdate(null);
         setStatus("up-to-date");
@@ -100,9 +108,9 @@ export function useUpdaterController(): UpdaterViewState {
       }
 
       setLoadedUpdate({
+        rid: update.rid,
         version: update.version,
         releaseNotes: update.body?.trim() || null,
-        downloadAndInstall: update.downloadAndInstall.bind(update),
       });
       setStatus("available");
     } catch (checkError) {
@@ -119,7 +127,7 @@ export function useUpdaterController(): UpdaterViewState {
     setStatus("downloading");
 
     try {
-      await loadedUpdate.downloadAndInstall((event) => {
+      await downloadAndInstallUpdate(loadedUpdate, (event) => {
         if (event.event === "Finished") {
           setStatus("installing");
           return;
@@ -136,14 +144,35 @@ export function useUpdaterController(): UpdaterViewState {
     setLoadedUpdate(null);
 
     try {
-      const { relaunch } = await loadProcessModule();
-      await relaunch();
+      await relaunchApp();
     } catch (relaunchError) {
       console.error("[updater] relaunch failed", relaunchError);
       setStatus("restart-required");
       setError("The update was installed, but the app could not restart automatically.");
     }
   }
+
+  const statusText = useMemo(() => {
+    switch (status) {
+      case "checking":
+        return "Checking for updates...";
+      case "available":
+        return loadedUpdate?.version ? `Update available: ${loadedUpdate.version}` : "Update available";
+      case "up-to-date":
+        return "You're up to date.";
+      case "downloading":
+        return "Downloading update...";
+      case "installing":
+        return "Installing update...";
+      case "restart-required":
+        return "Restart required to finish applying the update.";
+      case "error":
+        return error ?? "Unable to check for updates right now.";
+      case "idle":
+      default:
+        return "Ready to check for updates.";
+    }
+  }, [error, loadedUpdate, status]);
 
   return useMemo(
     () => ({
@@ -152,12 +181,13 @@ export function useUpdaterController(): UpdaterViewState {
       currentVersion,
       enabled,
       status,
+      statusText,
       error,
       availableVersion: loadedUpdate?.version ?? null,
       releaseNotes: loadedUpdate?.releaseNotes ?? null,
       checkForUpdates,
       downloadAndInstall,
     }),
-    [currentVersion, enabled, error, loadedUpdate, status]
+    [currentVersion, enabled, error, loadedUpdate, status, statusText]
   );
 }
