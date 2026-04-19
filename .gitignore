@@ -21,5 +21,10 @@ src-tauri/Cargo.lock
 .idea/
 .vscode/
 
-docs/
+docs/*
+!docs/COMPILATION.md
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/specs/*.md
 AGENTS.md

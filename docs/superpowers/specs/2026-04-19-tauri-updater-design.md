@@ -1,0 +1,347 @@
+# xTermius Tauri Updater Design
+
+Date: 2026-04-19
+
+## Goal
+
+Add a user-visible update flow for desktop builds so users can open an About surface, check for updates, and install a newer release from GitHub Releases.
+
+This phase intentionally avoids requiring a paid Apple Developer account. The update pipeline must still be valid, signed for Tauri updater verification, and operable on macOS direct-download builds.
+
+## Scope
+
+In scope:
+
+- Register and configure Tauri v2 official updater support.
+- Add an About entry point in the existing app UI.
+- Add a manual "Check for Updates" action.
+- Support updater states: idle, checking, up to date, update available, downloading, installing, error.
+- Publish updater artifacts and metadata to GitHub Releases.
+- Keep the implementation compatible with future Apple code signing / notarization work.
+
+Out of scope for this phase:
+
+- Apple Developer ID signing.
+- Apple notarization.
+- Silent background auto-install.
+- Release channels such as beta/nightly.
+- Windows/Linux-specific UX polish beyond keeping the updater pipeline cross-platform compatible.
+
+## Existing Context
+
+- The app already uses Tauri 2.x in [src-tauri/Cargo.toml](/Users/luang/Downloads/xTermius/xtermius/src-tauri/Cargo.toml) and [`@tauri-apps/api`](https://www.npmjs.com/package/@tauri-apps/api) in [package.json](/Users/luang/Downloads/xTermius/xtermius/package.json).
+- The app does not currently include `tauri-plugin-updater` or `@tauri-apps/plugin-updater`.
+- Tauri capabilities currently grant `core`, `shell`, and `dialog` permissions only in [src-tauri/capabilities/default.json](/Users/luang/Downloads/xTermius/xtermius/src-tauri/capabilities/default.json).
+- The current GitHub workflow in [release.yml](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) builds DMGs and uploads them to a GitHub Release, but it does not produce updater metadata or signed updater artifacts.
+- There is no existing About surface in the frontend.
+
+## Options Considered
+
+### Option A: Tauri official updater + GitHub Releases static JSON
+
+Use `tauri-plugin-updater`, generate updater artifacts during CI, upload `latest.json` plus signed bundles to GitHub Releases, and consume them from the frontend via `check()` / `downloadAndInstall()`.
+
+Pros:
+
+- Official Tauri path.
+- Works with the current stack.
+- Cross-platform architecture even if macOS is the immediate target.
+- Lowest maintenance cost.
+
+Cons:
+
+- Requires updater signing key management.
+- macOS user experience remains less polished until Apple signing / notarization is added.
+
+### Option B: Sparkle for macOS
+
+Use the native Sparkle framework for macOS-only updates.
+
+Pros:
+
+- Strong macOS-native updater UX.
+- Mature ecosystem.
+
+Cons:
+
+- Splits update logic by platform.
+- Adds native integration complexity to a Tauri app.
+- Worse long-term fit than Tauri's built-in updater.
+
+### Option C: Tauri updater + hosted update service
+
+Use Tauri updater with CrabNebula Cloud or another managed release backend.
+
+Pros:
+
+- Better release operations.
+- Easier future support for channels and staged rollouts.
+
+Cons:
+
+- Adds service dependency and operating cost.
+- Not necessary for the current repo size and release model.
+
+## Decision
+
+Use **Option A**.
+
+The app will integrate Tauri's official updater plugin, publish static updater metadata to GitHub Releases, and expose a manual update flow through a new About surface. The implementation must preserve a clean boundary so Apple signing and notarization can be layered on later without rewriting app logic.
+
+## User Experience
+
+Add an About action in the existing settings UI rather than inventing a separate top-level window in this phase. This keeps navigation simple and reuses existing settings patterns.
+
+The About section should show:
+
+- app name
+- current version
+- release channel label: `stable`
+- update status text
+- `Check for Updates` button
+- when an update is available:
+  - target version
+  - optional release notes snippet
+  - `Download and Install` button
+
+Suggested state progression:
+
+```text
+Idle -> Checking -> UpToDate
+                 -> UpdateAvailable -> Downloading -> Installing -> RestartRequired
+                 -> Error
+```
+
+ASCII wireframe:
+
+```text
++--------------------------------------------------+
+| Settings                                          |
+|                                                  |
+|  [Terminal] [Sync] [Import] [About]              |
+|                                                  |
+|  About xTermius                                  |
+|  Version: 0.2.0                                  |
+|  Channel: stable                                 |
+|                                                  |
+|  Status: Up to date                              |
+|  [Check for Updates]                             |
+|                                                  |
+|  If update exists:                               |
+|  New version: 0.2.1                              |
+|  Notes: Fix terminal session restore...          |
+|  [Download and Install]                          |
++--------------------------------------------------+
+```
+
+## Architecture
+
+### Frontend
+
+Add a dedicated updater controller hook that owns:
+
+- current version
+- check status
+- discovered update metadata
+- progress state
+- last error
+
+This hook should isolate all updater calls from presentational components. UI components should receive plain state and event handlers, not updater API objects.
+
+Primary frontend responsibilities:
+
+- call updater `check()`
+- store update metadata if present
+- call `downloadAndInstall()` when the user confirms
+- map raw updater errors into concise UI copy
+- call a dedicated relaunch step after a successful install when the updater leaves restart control to the app
+
+### Rust / Tauri
+
+Register `tauri_plugin_updater` in the builder setup alongside existing plugins.
+
+Most update actions can stay in frontend guest bindings. Rust should only hold configuration, plugin registration, and capability exposure unless a platform-specific limitation later forces backend orchestration.
+
+### CI / Release Pipeline
+
+The release workflow must stop being "DMG upload only" and become "updater-aware release publishing".
+
+Required outputs:
+
+- GitHub Release asset for direct install
+- updater bundle artifact for each supported target
+- `.sig` for each updater artifact
+- `latest.json` static manifest consumable by Tauri updater
+
+This is the root-cause fix. Without these artifacts, any About-page button is fake UI.
+
+## Configuration Changes
+
+### Rust dependencies
+
+Add `tauri-plugin-updater` to desktop targets in `src-tauri/Cargo.toml`.
+
+### Frontend dependencies
+
+Add `@tauri-apps/plugin-updater`.
+
+### Tauri config
+
+Update [src-tauri/tauri.conf.json](/Users/luang/Downloads/xTermius/xtermius/src-tauri/tauri.conf.json):
+
+- enable `bundle.createUpdaterArtifacts`
+- add `plugins.updater.pubkey`
+- add `plugins.updater.endpoints`
+- add macOS ad-hoc signing identity `-` for this phase
+
+The endpoint should point at the GitHub Releases static JSON asset, not the DMG.
+
+Expected shape:
+
+```json
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "UPDATER_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/jmluang/xTerm/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
+```
+
+### Capabilities
+
+Add `updater:default` to the main capability.
+
+## Release Pipeline Design
+
+The GitHub workflow must inject updater signing secrets during release builds:
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if used
+
+Release build requirements:
+
+1. Sync app version from the pushed tag as it does now.
+2. Build with updater artifact generation enabled.
+3. Collect updater bundles and `.sig`.
+4. Publish `latest.json` and target artifacts to the GitHub Release.
+
+Implementation path:
+
+- Migrate the release workflow to `tauri-apps/tauri-action`.
+- Keep the existing version-sync step before the action runs so tag-driven versioning still works.
+- Preserve the current macOS Intel and Apple Silicon matrix targets in the migrated workflow.
+
+The workflow must continue to publish macOS Intel and Apple Silicon artifacts because updater resolution is target-specific.
+
+## Data Flow
+
+### Check for update
+
+1. User opens Settings -> About.
+2. User clicks `Check for Updates`.
+3. Frontend hook calls `check()`.
+4. Tauri updater fetches `latest.json`.
+5. If no update is available, UI enters `UpToDate`.
+6. If an update is available, UI stores:
+   - version
+   - notes
+   - publication date if present
+
+### Install update
+
+1. User clicks `Download and Install`.
+2. Frontend hook calls `downloadAndInstall()`.
+3. UI shows progress state when possible.
+4. On success, UI shows restart/install completion messaging.
+5. If explicit relaunch is required by the plugin behavior on the current platform, handle it in the updater controller rather than the presentational component.
+
+## Error Handling
+
+Handle these failure classes explicitly:
+
+- updater not configured
+- endpoint unavailable
+- malformed `latest.json`
+- signature mismatch
+- no matching platform artifact
+- download failure
+- install failure
+
+User-facing copy should be short and actionable:
+
+- `Unable to check for updates right now.`
+- `This build does not have a compatible update package.`
+- `Update package verification failed.`
+
+Do not surface raw stack traces in the primary About UI. Log detailed errors to the console for diagnostics.
+
+## Security Requirements
+
+- Never commit the updater private key.
+- Public key may live in config or be injected at build time.
+- GitHub workflow must read signing material from secrets only.
+- The updater endpoint must stay HTTPS in production.
+
+## Testing Strategy
+
+### Local verification
+
+- Build a tagged release locally with updater signing env vars present.
+- Confirm updater artifacts are generated for macOS targets.
+- Inspect generated `.sig` files.
+
+### Workflow verification
+
+- Trigger a release build from a test version tag.
+- Confirm GitHub Release contains:
+  - direct installer assets
+  - updater bundles
+  - `.sig`
+  - `latest.json`
+
+### App verification
+
+- Install older build manually.
+- Publish newer release.
+- Open About and verify:
+  - check completes successfully
+  - update metadata is shown
+  - install path completes
+
+### Failure-path verification
+
+- Break endpoint URL and verify error state.
+- Remove matching platform entry from test JSON and verify graceful fallback.
+- Validate that unsigned or mismatched signatures are rejected.
+
+## Rollout Notes
+
+This phase is intentionally acceptable-but-not-perfect for macOS distribution. Users may still have to explicitly allow direct-download builds because ad-hoc signing is not notarization.
+
+That trade-off is acceptable because the immediate goal is to establish a working updater pipeline and in-app update UX without requiring paid Apple infrastructure. Future work can replace ad-hoc signing with Developer ID + notarization without changing the app-side updater architecture.
+
+## Implementation Outline
+
+1. Add updater dependencies and register the plugin.
+2. Extend capabilities and config.
+3. Build an updater controller hook.
+4. Add About section UI to Settings.
+5. Wire check/install interactions.
+6. Rework release workflow to publish updater assets.
+7. Validate end-to-end with a test release tag.
+
+## Open Questions Resolved
+
+- Do we need Sparkle first? No. Tauri official updater is the preferred fit.
+- Do we need a paid Apple account for phase 1? No.
+- Do we need updater signing anyway? Yes, absolutely.
