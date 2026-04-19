@@ -27,7 +27,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+          ERROR_LOG="$(mktemp)"
+          if RELEASE_IS_DRAFT="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.draft' 2>"${ERROR_LOG}")"; then
             if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
               echo "state=draft" >> "$GITHUB_OUTPUT"
               echo "Release state: draft"
@@ -36,8 +37,13 @@ jobs:
               echo "Release state: published"
             fi
           else
-            echo "state=missing" >> "$GITHUB_OUTPUT"
-            echo "Release state: missing"
+            if grep -qiE '404|not found|release not found' "${ERROR_LOG}"; then
+              echo "state=missing" >> "$GITHUB_OUTPUT"
+              echo "Release state: missing"
+            else
+              cat "${ERROR_LOG}" >&2
+              exit 1
+            fi
           fi
 
   build:
