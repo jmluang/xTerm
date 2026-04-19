@@ -223,7 +223,7 @@ Expected shape:
   },
   "plugins": {
     "updater": {
-      "pubkey": "UPDATER_PUBLIC_KEY",
+      "pubkey": "the exact public key emitted by `tauri signer generate`",
       "endpoints": [
         "https://github.com/jmluang/xTerm/releases/latest/download/latest.json"
       ]
