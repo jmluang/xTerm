@@ -33,7 +33,7 @@ Out of scope for this phase:
 - The app does not currently include `tauri-plugin-updater` or `@tauri-apps/plugin-updater`.
 - Tauri capabilities currently grant `core`, `shell`, and `dialog` permissions only in [src-tauri/capabilities/default.json](../../../src-tauri/capabilities/default.json).
 - The current GitHub workflow in [release.yml](../../../.github/workflows/release.yml) builds DMGs and uploads them to a GitHub Release, but it does not produce updater metadata or signed updater artifacts.
-- There is no existing About surface in the frontend.
+- Settings navigation currently lives in [src/components/settings/SettingsPanel.tsx](../../../src/components/settings/SettingsPanel.tsx), [src/components/settings/SettingsWindowApp.tsx](../../../src/components/settings/SettingsWindowApp.tsx), and [src/hooks/useAppController.ts](../../../src/hooks/useAppController.ts). `SettingsSection` in [src/types/settings.ts](../../../src/types/settings.ts) only supports `terminal | sync | import`, so About/update work must extend that shared navigation contract instead of introducing a parallel route.
 
 ## Options Considered
 
@@ -91,6 +91,8 @@ The app will integrate Tauri's official updater plugin, publish static updater m
 ## User Experience
 
 Add an About action in the existing settings UI rather than inventing a separate top-level window in this phase. This keeps navigation simple and reuses existing settings patterns.
+
+In code terms, phase 1 extends the existing settings section model with an `about` section and routes both the main-window settings launcher and the standalone settings window through the same section value.
 
 The About section should show:
 
@@ -150,18 +152,24 @@ Add a dedicated updater controller hook that owns:
 
 This hook should isolate all updater calls from presentational components. UI components should receive plain state and event handlers, not updater API objects.
 
+The hook should sit above [SettingsPanel.tsx](../../../src/components/settings/SettingsPanel.tsx) and be consumed by both [useAppController.ts](../../../src/hooks/useAppController.ts) and [SettingsWindowApp.tsx](../../../src/components/settings/SettingsWindowApp.tsx), because those are the two places that currently feed state into the shared settings surface.
+
 Primary frontend responsibilities:
 
 - call updater `check()`
 - store update metadata if present
 - call `downloadAndInstall()` when the user confirms
+- call `relaunch()` after a successful install so the new version is activated immediately
 - map raw updater errors into concise UI copy
-- call a dedicated relaunch step after a successful install when the updater leaves restart control to the app
-- gate updater UI and updater API usage behind a desktop-macOS platform check in phase 1
+- gate updater UI and updater API usage behind a shared desktop-macOS capability check in phase 1
+
+Platform gating belongs in the updater controller layer, not inside the About card markup. The UI should receive a simple `supportsUpdaterActions` boolean so non-macOS builds render the same About section without exposing dead buttons.
 
 ### Rust / Tauri
 
 Register `tauri_plugin_updater` in the builder setup alongside existing plugins.
+
+Register `tauri_plugin_process` as the companion restart path for a completed install.
 
 Most update actions can stay in frontend guest bindings. Rust should only hold configuration, plugin registration, and capability exposure unless a platform-specific limitation later forces backend orchestration.
 
@@ -184,9 +192,13 @@ This is the root-cause fix. Without these artifacts, any About-page button is fa
 
 Add `tauri-plugin-updater` to desktop targets in `src-tauri/Cargo.toml`.
 
+Add `tauri-plugin-process` so the installed update can relaunch into the new version without a manual restart prompt.
+
 ### Frontend dependencies
 
 Add `@tauri-apps/plugin-updater`.
+
+Add `@tauri-apps/plugin-process` for the post-install relaunch step.
 
 ### Tauri config
 
@@ -222,7 +234,7 @@ Expected shape:
 
 ### Capabilities
 
-Add `updater:default` to the main capability.
+Add `updater:default` and `process:default` to the main capability.
 
 ### `latest.json` manifest shape
 
@@ -248,6 +260,13 @@ Release build requirements:
 2. Build with updater artifact generation enabled.
 3. Collect updater bundles and `.sig`.
 4. Publish `latest.json` and target artifacts to the GitHub Release.
+
+The current workflow already contains the invariants that must survive the migration:
+
+- tag-triggered releases (`v*`)
+- version synchronization across [package.json](../../../package.json), [src-tauri/tauri.conf.json](../../../src-tauri/tauri.conf.json), and [src-tauri/Cargo.toml](../../../src-tauri/Cargo.toml)
+- separate macOS matrix entries for `aarch64-apple-darwin` and `x86_64-apple-darwin`
+- Node/Rust setup before `tauri build`
 
 Implementation path:
 
@@ -277,8 +296,8 @@ The workflow must continue to publish macOS Intel and Apple Silicon artifacts be
 1. User clicks `Download and Install`.
 2. Frontend hook calls `downloadAndInstall()`.
 3. UI shows progress state when possible.
-4. On success, UI shows restart/install completion messaging.
-5. If explicit relaunch is required by the plugin behavior on the current platform, handle it in the updater controller rather than the presentational component.
+4. On success, frontend calls `relaunch()`.
+5. The new app instance starts on the updated version.
 
 ## Error Handling
 
@@ -291,12 +310,14 @@ Handle these failure classes explicitly:
 - no matching platform artifact
 - download failure
 - install failure
+- relaunch failure after a successful install
 
 User-facing copy should be short and actionable:
 
 - `Unable to check for updates right now.`
 - `This build does not have a compatible update package.`
 - `Update package verification failed.`
+- `The update was installed, but the app could not restart automatically.`
 
 Do not surface raw stack traces in the primary About UI. Log detailed errors to the console for diagnostics.
 
