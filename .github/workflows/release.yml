@@ -12,19 +12,15 @@ permissions:
 jobs:
   build:
     permissions:
-      contents: read
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-            artifact_name: bundles-macos-aarch64
-            upload_glob: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            artifact_name: bundles-macos-x86_64
-            upload_glob: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -35,14 +31,18 @@ jobs:
           fetch-depth: 0
 
       - name: Derive release version from tag
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-          echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "Release tag: ${TAG}"
-          echo "Release version: ${VERSION}"
+          echo "RELEASE_TAG=" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=" >> "$GITHUB_ENV"
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+            echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+            echo "Release tag: ${TAG}"
+            echo "Release version: ${VERSION}"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -66,33 +66,19 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Build Tauri app bundle
-        run: npm run tauri build -- --target ${{ matrix.target }}
-
-      - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
+      - name: Build and publish Tauri release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.upload_glob }}
-          if-no-files-found: error
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all bundle artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          merge-multiple: true
-
-      - name: Upload to GitHub Release
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          artifacts: "release-assets/**/*.dmg"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "xTermius ${{ env.RELEASE_TAG }}"
+          releaseDraft: false
+          prerelease: false
           generateReleaseNotes: true
+          tauriScript: npm run tauri --
+          args: --target ${{ matrix.target }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
