@@ -235,6 +235,7 @@ function App() {
           syncBusy={ctrl.syncBusy}
           syncNotice={ctrl.syncNotice}
           isInTauri={ctrl.isInTauri}
+          updater={ctrl.updater}
           onSaveSettings={ctrl.saveWebdavSettings}
           onPull={ctrl.doWebdavPull}
           onPush={ctrl.doWebdavPush}
