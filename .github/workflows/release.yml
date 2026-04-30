@@ -36,7 +36,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ERROR_LOG="$(mktemp)"
-          if RELEASE_IS_DRAFT="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.draft' 2>"${ERROR_LOG}")"; then
+          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
             if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
               echo "state=draft" >> "$GITHUB_OUTPUT"
               echo "Release state: draft"
@@ -56,7 +56,7 @@ jobs:
 
       - name: Checkout
         if: steps.inspect_release.outputs.state != 'published'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -82,7 +82,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.inspect_release.outputs.state != 'published'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm
@@ -135,7 +135,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ERROR_LOG="$(mktemp)"
-          if RELEASE_IS_DRAFT="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.draft' 2>"${ERROR_LOG}")"; then
+          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
             if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
               echo "state=draft" >> "$GITHUB_OUTPUT"
               echo "Release state: draft"
