@@ -253,6 +253,7 @@ The GitHub workflow must inject updater signing secrets during release builds:
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if used
+- write the private key secret to a temporary runner file and expose it to Tauri through `TAURI_SIGNING_PRIVATE_KEY_PATH`, so multiline minisign key contents are parsed as a key file instead of a base64 environment value
 
 Release build requirements:
 

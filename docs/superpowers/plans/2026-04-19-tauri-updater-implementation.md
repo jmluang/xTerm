@@ -487,10 +487,23 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Write Tauri updater private key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is missing" >&2
+            exit 1
+          fi
+
+          KEY_PATH="${RUNNER_TEMP}/tauri-updater.key"
+          printf '%s' "${TAURI_SIGNING_PRIVATE_KEY}" > "${KEY_PATH}"
+          chmod 600 "${KEY_PATH}"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=${KEY_PATH}" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
@@ -556,7 +569,7 @@ Expected: both PASS.
 Run:
 
 ```bash
-export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/xtermius-updater.key"
+export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/xtermius-updater.key"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 npm run tauri build -- --target aarch64-apple-darwin
 ```
