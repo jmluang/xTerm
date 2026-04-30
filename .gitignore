@@ -15,7 +15,6 @@ pnpm-debug.log*
 
 # Tauri / Rust
 src-tauri/target/
-src-tauri/Cargo.lock
 
 # IDEs
 .idea/
