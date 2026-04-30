@@ -120,8 +120,7 @@ jobs:
           generateReleaseNotes: true
           tauriScript: npm run tauri
           args: --target ${{ matrix.target }}
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          includeUpdaterJson: true
 
   finalize_release:
     needs: build

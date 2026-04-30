@@ -274,6 +274,9 @@ Implementation path:
 - Keep the existing version-sync step before the action runs so tag-driven versioning still works.
 - Preserve the current macOS Intel and Apple Silicon matrix targets in the migrated workflow.
 - Treat `latest.json`, updater bundles, and `.sig` files as required outputs of the official updater release pipeline, and add workflow/release verification that those assets are present on the final GitHub Release.
+- Keep matrix build jobs uploading into a draft release first, then finalize the release only after all macOS targets succeed. Do not expose a public release from a single matrix leg.
+- Serialize same-tag runs with workflow concurrency and serialize same-run target uploads with matrix `max-parallel: 1`.
+- Make reruns state-aware: published releases must no-op, draft releases may resume upload/finalize, and only missing releases may be created from scratch.
 
 The workflow must continue to publish macOS Intel and Apple Silicon artifacts because updater resolution is target-specific.
 

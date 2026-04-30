@@ -412,21 +412,21 @@ git commit -m "feat: add settings about updater flow"
 
 **Files:**
 - Modify: `.github/workflows/release.yml`
-- Test: `rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|uploadUpdaterJson|uploadUpdaterSignatures|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml`
+- Test: `rg -n "tauri-apps/tauri-action@action-v0.6.2|TAURI_SIGNING_PRIVATE_KEY|includeUpdaterJson|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml`
 
 - [ ] **Step 1: Write the failing workflow assertion**
 
 Confirm the current workflow is still missing the official updater release path:
 
 ```bash
-rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|latest.json" .github/workflows/release.yml
+rg -n "tauri-apps/tauri-action@action-v0.6.2|TAURI_SIGNING_PRIVATE_KEY|includeUpdaterJson" .github/workflows/release.yml
 ```
 
 Expected: FAIL with no matches.
 
 - [ ] **Step 2: Replace the two-job DMG upload flow with a single updater-aware publish job**
 
-Rewrite [`.github/workflows/release.yml`](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) around `tauri-apps/tauri-action@v1`, while preserving the current tag trigger, version-sync step, and dual macOS targets:
+Rewrite [`.github/workflows/release.yml`](/Users/luang/Downloads/xTermius/xtermius/.github/workflows/release.yml) around `tauri-apps/tauri-action@action-v0.6.2`, while preserving the current tag trigger, version-sync step, and dual macOS targets:
 
 ```yaml
 name: Release
@@ -487,7 +487,7 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - uses: tauri-apps/tauri-action@v1
+      - uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -495,26 +495,38 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "xTermius ${{ env.RELEASE_TAG }}"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
-          tauriScript: npm run tauri --
+          tauriScript: npm run tauri
           args: --target ${{ matrix.target }}
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          includeUpdaterJson: true
+
+  finalize_release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
 ```
 
-This removes the old `upload-artifact` + `ncipollo/release-action` path entirely. `tauri-action` should own both build and release publication.
+This removes the old `upload-artifact` + `ncipollo/release-action` path entirely. `tauri-action` still owns build/upload publication, but the release only becomes public after the finalizer job confirms both macOS targets succeeded.
 
 - [ ] **Step 3: Run the workflow structure assertion again**
 
 Run:
 
 ```bash
-rg -n "tauri-apps/tauri-action@v1|TAURI_SIGNING_PRIVATE_KEY|uploadUpdaterJson|uploadUpdaterSignatures|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml
+rg -n "tauri-apps/tauri-action@action-v0.6.2|TAURI_SIGNING_PRIVATE_KEY|includeUpdaterJson|Sync app versions from tag|aarch64-apple-darwin|x86_64-apple-darwin" .github/workflows/release.yml
 ```
 
-Expected: PASS with hits for the action, signing secrets, updater JSON/signature uploads, version-sync step, and both macOS targets.
+Expected: PASS with hits for the action, signing secrets, updater JSON inclusion, version-sync step, and both macOS targets.
 
 - [ ] **Step 4: Commit the release migration**
 
