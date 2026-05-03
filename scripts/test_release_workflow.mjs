@@ -99,6 +99,20 @@ check("release workflow checks out the selected release tag", () => {
   );
 });
 
+check("release workflow passes the peeled release commit to tauri-action", () => {
+  const workflow = read(".github/workflows/release.yml");
+  assert.match(
+    workflow,
+    /git rev-list -n 1 "\$\{RELEASE_TAG\}"/,
+    "Release workflow must resolve annotated tags to their target commit"
+  );
+  assert.match(
+    workflow,
+    /releaseCommitish:\s*\$\{\{\s*env\.RELEASE_COMMIT\s*\}\}/,
+    "tauri-action must receive the peeled release commit instead of relying on context.sha"
+  );
+});
+
 check("release workflow runs static release tests after syncing versions", () => {
   const workflow = read(".github/workflows/release.yml");
   assert.match(workflow, /name:\s*Run release regression tests/, "Release workflow must have a post-sync regression test step");
