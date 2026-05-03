@@ -14,7 +14,8 @@ In scope:
 
 - Register and configure Tauri v2 official updater support.
 - Add an About entry point in the existing app UI.
-- Add a manual "Check for Updates" action on macOS builds.
+- Automatically check for updates on macOS builds when the updater controller starts.
+- Keep a manual "Check for Updates" action on macOS builds as an explicit retry path.
 - Support updater states: idle, checking, up to date, update available, downloading, installing, error.
 - Publish updater artifacts and metadata to GitHub Releases.
 - Keep the implementation compatible with future Apple code signing / notarization work.
@@ -86,7 +87,7 @@ Cons:
 
 Use **Option A**.
 
-The app will integrate Tauri's official updater plugin, publish static updater metadata to GitHub Releases, and expose a manual update flow through a new About surface. The implementation must preserve a clean boundary so Apple signing and notarization can be layered on later without rewriting app logic.
+The app will integrate Tauri's official updater plugin, publish static updater metadata to GitHub Releases, and expose an automatic check plus manual retry flow through a new About surface. The implementation must preserve a clean boundary so Apple signing and notarization can be layered on later without rewriting app logic.
 
 ## User Experience
 
@@ -100,7 +101,8 @@ The About section should show:
 - current version
 - release channel label: `stable`
 - update status text on macOS builds
-- `Check for Updates` button on macOS builds
+- automatic update-check status on macOS builds
+- `Check for Updates` button on macOS builds for retry/manual refresh
 - when an update is available on macOS builds:
   - target version
   - optional release notes snippet
@@ -128,7 +130,7 @@ ASCII wireframe (version numbers are illustrative only; actual values come from 
 |  Version: <current>                              |
 |  Channel: stable                                 |
 |                                                  |
-|  Status: Up to date                              |
+|  Status: Checking... -> Up to date               |
 |  [Check for Updates]                             |
 |                                                  |
 |  If update exists:                               |
@@ -157,6 +159,7 @@ The hook should sit above [SettingsPanel.tsx](../../../src/components/settings/S
 Primary frontend responsibilities:
 
 - call updater `check()`
+- trigger one automatic updater check when updater actions are supported
 - store update metadata if present
 - call `downloadAndInstall()` when the user confirms
 - call `relaunch()` after a successful install so the new version is activated immediately
@@ -284,15 +287,15 @@ The workflow must continue to publish macOS Intel and Apple Silicon artifacts be
 
 ### Check for update
 
-1. User opens Settings -> About.
-2. User clicks `Check for Updates`.
-3. Frontend hook calls `check()`.
-4. Tauri updater fetches `latest.json`.
-5. If no update is available, UI enters `UpToDate`.
-6. If an update is available, UI stores:
+1. App starts, or a settings webview with updater actions starts.
+2. Frontend hook automatically calls `check()`.
+3. Tauri updater fetches `latest.json`.
+4. If no update is available, UI enters `UpToDate`.
+5. If an update is available, UI stores:
    - version
    - notes
    - publication date if present
+6. User can click `Check for Updates` to retry the same check path manually.
 
 ### Install update
 
@@ -353,7 +356,8 @@ Do not surface raw stack traces in the primary About UI. Log detailed errors to 
 - Install older build manually.
 - Publish newer release.
 - Open About and verify:
-  - check completes successfully
+  - automatic check completes successfully
+  - manual check can retry the same path
   - update metadata is shown
   - install path completes
 

@@ -1,12 +1,13 @@
 {
   "name": "xtermius",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test:updater": "node scripts/test_updater_regressions.mjs",
     "icons": "tauri icon ../icon.png",
     "tauri": "tauri",
     "bench:startup": "./scripts/bench_startup.sh"

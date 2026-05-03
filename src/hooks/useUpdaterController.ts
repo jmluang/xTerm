@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import packageJson from "../../package.json";
@@ -64,6 +64,7 @@ export function useUpdaterController(): UpdaterViewState {
   const [status, setStatus] = useState<UpdaterStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [loadedUpdate, setLoadedUpdate] = useState<LoadedUpdate | null>(null);
+  const autoCheckStartedRef = useRef(false);
 
   const enabled = isTauriRuntime() && isMacPlatform();
 
@@ -94,7 +95,7 @@ export function useUpdaterController(): UpdaterViewState {
     };
   }, []);
 
-  async function checkForUpdates() {
+  const runUpdateCheck = useCallback(async () => {
     if (!enabled) return;
     setStatus("checking");
     setError(null);
@@ -119,7 +120,14 @@ export function useUpdaterController(): UpdaterViewState {
       setStatus("error");
       setError("Unable to check for updates right now.");
     }
-  }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (autoCheckStartedRef.current) return;
+    autoCheckStartedRef.current = true;
+    void runUpdateCheck();
+  }, [enabled, runUpdateCheck]);
 
   async function downloadAndInstall() {
     if (!enabled || !loadedUpdate) return;
@@ -185,9 +193,9 @@ export function useUpdaterController(): UpdaterViewState {
       error,
       availableVersion: loadedUpdate?.version ?? null,
       releaseNotes: loadedUpdate?.releaseNotes ?? null,
-      checkForUpdates,
+      checkForUpdates: () => runUpdateCheck(),
       downloadAndInstall,
     }),
-    [currentVersion, enabled, error, loadedUpdate, status, statusText]
+    [currentVersion, enabled, error, loadedUpdate, runUpdateCheck, status, statusText]
   );
 }

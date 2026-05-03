@@ -5773,7 +5773,7 @@ dependencies = [
 
 [[package]]
 name = "xtermius"
-version = "0.1.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
