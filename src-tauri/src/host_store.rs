@@ -1,5 +1,6 @@
 use crate::credential_store::{
-    keychain_delete_password, keychain_has_password, keychain_set_password,
+    keychain_delete_password, keychain_has_password, keychain_set_password, webdav_password_delete,
+    webdav_password_has, webdav_password_set,
 };
 use crate::models::{Host, Settings};
 use crate::ssh_config::generate_ssh_config;
@@ -289,20 +290,51 @@ pub fn settings_load() -> Result<Settings, String> {
             webdav_url: None,
             webdav_folder: Some("xTermius".to_string()),
             webdav_username: None,
+            has_webdav_password: webdav_password_has(),
             webdav_password: None,
+            webdav_password_clear: false,
         });
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut settings: Settings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    if let Some(password) = settings
+        .webdav_password
+        .as_ref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+    {
+        webdav_password_set(password)?;
+        settings.webdav_password = None;
+        settings.has_webdav_password = webdav_password_has();
+        settings.webdav_password_clear = false;
+        let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+        fs::write(&path, content).map_err(|e| e.to_string())?;
+    }
     if settings.webdav_folder.is_none() {
         settings.webdav_folder = Some("xTermius".to_string());
     }
+    settings.has_webdav_password = webdav_password_has();
+    settings.webdav_password = None;
+    settings.webdav_password_clear = false;
     Ok(settings)
 }
 
 #[tauri::command]
-pub fn settings_save(settings: Settings) -> Result<(), String> {
+pub fn settings_save(mut settings: Settings) -> Result<(), String> {
     ensure_config_dir()?;
+    if settings.webdav_password_clear {
+        webdav_password_delete()?;
+    } else if let Some(password) = settings
+        .webdav_password
+        .as_ref()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+    {
+        webdav_password_set(password)?;
+    }
+    settings.has_webdav_password = webdav_password_has();
+    settings.webdav_password = None;
+    settings.webdav_password_clear = false;
     let path = get_settings_path();
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&path, content).map_err(|e| e.to_string())?;

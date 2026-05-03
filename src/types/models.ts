@@ -69,7 +69,9 @@ export interface Settings {
   webdav_url?: string | null;
   webdav_folder?: string | null;
   webdav_username?: string | null;
+  has_webdav_password?: boolean;
   webdav_password?: string | null;
+  webdav_password_clear?: boolean;
 }
 
 export interface SshConfigImportCandidate {

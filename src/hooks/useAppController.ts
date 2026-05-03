@@ -68,6 +68,7 @@ export function useAppController() {
     hosts: hostsMgr.hosts,
     sessions: terminal.sessions,
     activeSessionId: terminal.activeSessionId,
+    metricsDockEnabled,
   });
   const updater = useUpdaterController();
 

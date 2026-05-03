@@ -122,14 +122,24 @@ export function HostEditorDialog(props: {
                           type="password"
                           value={formData.password ?? ""}
                           onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                          placeholder={
-                            editingHost?.hasPassword || formData.hasPassword
-                              ? "Edit saved password"
-                              : "Leave empty to prompt"
-                          }
-                          className="flex-1"
-                        />
-                      </div>
+	                          placeholder={
+	                            editingHost?.hasPassword || formData.hasPassword
+	                              ? "Leave blank to keep saved password"
+	                              : "Leave empty to prompt"
+	                          }
+	                          className="flex-1"
+	                        />
+	                        {editingHost?.hasPassword || formData.hasPassword ? (
+	                          <Button
+	                            type="button"
+	                            variant="outline"
+	                            size="sm"
+	                            onClick={() => setFormData({ ...formData, password: "", hasPassword: false })}
+	                          >
+	                            Clear
+	                          </Button>
+	                        ) : null}
+	                      </div>
                       <div className="text-[11px] text-muted-foreground">
                         Passwords are stored in Keychain on this device and are not synced via WebDAV.
                       </div>

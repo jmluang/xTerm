@@ -1,3 +1,4 @@
+use crate::credential_store::webdav_password_get;
 use crate::host_store::{
     get_hosts_db_path, hosts_load, import_hosts_json_to_db, open_hosts_db, settings_load,
 };
@@ -9,22 +10,48 @@ use std::fs;
 use std::path::PathBuf;
 use url::Url;
 
+const MAX_WEBDAV_DB_BYTES: usize = 25 * 1024 * 1024;
+
+type WebdavAuth = Option<(String, String)>;
+
+fn webdav_auth(settings: &Settings) -> Result<WebdavAuth, String> {
+    let username = settings
+        .webdav_username
+        .as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let password = webdav_password_get()?
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    Ok(username.zip(password))
+}
+
+fn with_webdav_auth(
+    request: reqwest::RequestBuilder,
+    auth: &WebdavAuth,
+) -> reqwest::RequestBuilder {
+    if let Some((username, password)) = auth {
+        request.basic_auth(username, Some(password))
+    } else {
+        request
+    }
+}
+
 async fn webdav_mkcol(
     client: &reqwest::Client,
-    settings: &Settings,
+    auth: &WebdavAuth,
     url: &str,
 ) -> Result<reqwest::Response, String> {
-    let mut req = client.request(Method::from_bytes(b"MKCOL").unwrap(), url);
-    if let (Some(username), Some(password)) = (&settings.webdav_username, &settings.webdav_password)
-    {
-        req = req.basic_auth(username, Some(password));
-    }
+    let req = with_webdav_auth(
+        client.request(Method::from_bytes(b"MKCOL").unwrap(), url),
+        auth,
+    );
     req.send().await.map_err(|e| e.to_string())
 }
 
 async fn webdav_ensure_remote_folder(
     client: &reqwest::Client,
-    settings: &Settings,
+    auth: &WebdavAuth,
     webdav_url: &str,
     folder: Option<&str>,
 ) -> Result<(), String> {
@@ -72,7 +99,7 @@ async fn webdav_ensure_remote_folder(
             cur.set_path(&pp);
         }
 
-        let resp = webdav_mkcol(client, settings, cur.as_str()).await?;
+        let resp = webdav_mkcol(client, auth, cur.as_str()).await?;
         let status = resp.status();
         if status.is_success() || status.as_u16() == 405 {
             continue;
@@ -105,10 +132,36 @@ fn hosts_db_sidecar_paths() -> Vec<PathBuf> {
     ]
 }
 
+fn validate_downloaded_hosts_db(path: &PathBuf) -> Result<(), String> {
+    let conn = rusqlite::Connection::open(path)
+        .map_err(|e| format!("Downloaded DB is not readable: {e}"))?;
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|e| format!("Downloaded DB integrity check failed: {e}"))?;
+    if integrity != "ok" {
+        return Err(format!("Downloaded DB integrity check failed: {integrity}"));
+    }
+    let hosts_table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'hosts'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Downloaded DB schema check failed: {e}"))?;
+    if hosts_table_exists != 1 {
+        return Err("Downloaded DB does not contain a hosts table".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn webdav_pull() -> Result<(), String> {
     let settings = settings_load()?;
-    let webdav_url = settings.webdav_url.ok_or("WebDAV URL not configured")?;
+    let webdav_url = settings
+        .webdav_url
+        .clone()
+        .ok_or("WebDAV URL not configured")?;
+    let auth = webdav_auth(&settings)?;
 
     let client = reqwest::Client::new();
     let url_json = webdav_resolve_url_with_folder(
@@ -116,12 +169,7 @@ pub async fn webdav_pull() -> Result<(), String> {
         settings.webdav_folder.as_deref(),
         "hosts.json",
     )?;
-    let mut request = client.get(&url_json);
-
-    if let (Some(username), Some(password)) = (&settings.webdav_username, &settings.webdav_password)
-    {
-        request = request.basic_auth(username, Some(password));
-    }
+    let request = with_webdav_auth(client.get(&url_json), &auth);
 
     let response = request.send().await.map_err(|e| e.to_string())?;
     let status = response.status();
@@ -135,14 +183,12 @@ pub async fn webdav_pull() -> Result<(), String> {
     }
 
     if status.as_u16() == 404 {
-        let url_db =
-            webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.db")?;
-        let mut r2 = client.get(&url_db);
-        if let (Some(username), Some(password)) =
-            (&settings.webdav_username, &settings.webdav_password)
-        {
-            r2 = r2.basic_auth(username, Some(password));
-        }
+        let url_db = webdav_resolve_url_with_folder(
+            &webdav_url,
+            settings.webdav_folder.as_deref(),
+            "hosts.db",
+        )?;
+        let r2 = with_webdav_auth(client.get(&url_db), &auth);
         let resp2 = r2.send().await.map_err(|e| e.to_string())?;
         if !resp2.status().is_success() {
             let s2 = resp2.status();
@@ -157,6 +203,12 @@ pub async fn webdav_pull() -> Result<(), String> {
             ));
         }
         let bytes = resp2.bytes().await.map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_WEBDAV_DB_BYTES {
+            return Err(format!(
+                "Downloaded hosts.db is too large: {} bytes",
+                bytes.len()
+            ));
+        }
 
         let backup_path = get_hosts_db_path();
         if backup_path.exists() {
@@ -165,12 +217,20 @@ pub async fn webdav_pull() -> Result<(), String> {
             let _ = fs::copy(&backup_path, &backup);
         }
 
+        let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f");
+        let temp_path = backup_path.with_extension(format!("db.pull.{timestamp}"));
+        fs::write(&temp_path, bytes).map_err(|e| e.to_string())?;
+        if let Err(e) = validate_downloaded_hosts_db(&temp_path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e);
+        }
+
         // If the local DB was ever in WAL mode, stale sidecar files can replay local edits
-        // (e.g. deletions) after we overwrite the main DB file. Remove them before/after write.
+        // (e.g. deletions) after we replace the main DB file. Remove them before/after rename.
         for p in hosts_db_sidecar_paths() {
             let _ = fs::remove_file(p);
         }
-        fs::write(&backup_path, bytes).map_err(|e| e.to_string())?;
+        fs::rename(&temp_path, &backup_path).map_err(|e| e.to_string())?;
         for p in hosts_db_sidecar_paths() {
             let _ = fs::remove_file(p);
         }
@@ -191,6 +251,7 @@ pub async fn webdav_pull() -> Result<(), String> {
 #[tauri::command]
 pub async fn webdav_push() -> Result<(), String> {
     let settings = settings_load()?;
+    let auth = webdav_auth(&settings)?;
     let webdav_url = settings
         .webdav_url
         .clone()
@@ -210,21 +271,19 @@ pub async fn webdav_push() -> Result<(), String> {
     let client = reqwest::Client::new();
     let url_db =
         webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.db")?;
-    let url_json =
-        webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.json")?;
+    let url_json = webdav_resolve_url_with_folder(
+        &webdav_url,
+        settings.webdav_folder.as_deref(),
+        "hosts.json",
+    )?;
     webdav_ensure_remote_folder(
         &client,
-        &settings,
+        &auth,
         &webdav_url,
         settings.webdav_folder.as_deref(),
     )
     .await?;
-    let mut request = client.put(&url_db).body(content);
-
-    if let (Some(username), Some(password)) = (&settings.webdav_username, &settings.webdav_password)
-    {
-        request = request.basic_auth(username, Some(password));
-    }
+    let request = with_webdav_auth(client.put(&url_db).body(content), &auth);
 
     let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
@@ -240,11 +299,7 @@ pub async fn webdav_push() -> Result<(), String> {
         ));
     }
 
-    let mut req_json = client.put(&url_json).body(hosts_json);
-    if let (Some(username), Some(password)) = (&settings.webdav_username, &settings.webdav_password)
-    {
-        req_json = req_json.basic_auth(username, Some(password));
-    }
+    let req_json = with_webdav_auth(client.put(&url_json).body(hosts_json), &auth);
     let resp_json = req_json.send().await.map_err(|e| e.to_string())?;
     if !resp_json.status().is_success() {
         let status = resp_json.status();

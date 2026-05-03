@@ -44,6 +44,9 @@ export function ToastViewport() {
         return (
           <div
             key={item.id}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
             className={[
               "min-w-[220px] max-w-[360px] rounded-lg border px-3 py-2 shadow-lg backdrop-blur-sm",
               "text-[12px] leading-snug",

@@ -60,5 +60,10 @@ pub struct Settings {
     #[serde(default)]
     pub webdav_folder: Option<String>,
     pub webdav_username: Option<String>,
+    #[serde(default)]
+    pub has_webdav_password: bool,
+    #[serde(default, skip_serializing)]
     pub webdav_password: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub webdav_password_clear: bool,
 }

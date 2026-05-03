@@ -230,15 +230,8 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
 
   async function openEditDialog(host: Host) {
     setEditingHost(host);
-    setFormData({ ...host });
+    setFormData({ ...host, password: "" });
     setShowDialog(true);
-    if (!isInTauri || !host.hasPassword) return;
-    try {
-      const password = await invoke<string | null>("host_password_get", { hostId: host.id });
-      setFormData((prev) => ({ ...prev, password: password ?? "", hasPassword: !!(password && password.trim()) }));
-    } catch (e) {
-      console.debug("[keychain] preload host password failed", e);
-    }
   }
 
   async function handleSave() {
@@ -250,18 +243,18 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
 
     if (editingHost) {
       const patch: any = { ...formData, updatedAt: now };
-      if (typeof formData.password === "string") {
-        patch.hasPassword = formData.password.trim().length > 0;
-      }
+      delete patch.password;
       newHosts = hosts.map((h) => (h.id === editingHost.id ? ({ ...h, ...patch } as Host) : h));
       targetId = editingHost.id;
       if (typeof formData.password === "string") {
         const t = formData.password.trim();
-        if (!t) {
-          pwAction = "clear";
-        } else {
+        if (t) {
           pwAction = "set";
           pwValue = formData.password;
+          newHosts = newHosts.map((h) => (h.id === editingHost.id ? { ...h, hasPassword: true } : h));
+        } else if (editingHost.hasPassword && formData.hasPassword === false) {
+          pwAction = "clear";
+          newHosts = newHosts.map((h) => (h.id === editingHost.id ? { ...h, hasPassword: false } : h));
         }
       }
     } else {

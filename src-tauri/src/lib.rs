@@ -1,7 +1,7 @@
 mod app;
 mod credential_store;
-mod host_store;
 mod host_probe;
+mod host_store;
 mod models;
 mod pty;
 mod ssh_config;

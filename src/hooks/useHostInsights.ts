@@ -35,8 +35,9 @@ export function useHostInsights(params: {
   hosts: Host[];
   sessions: Session[];
   activeSessionId: string | null;
+  metricsDockEnabled: boolean;
 }) {
-  const { isInTauri, hosts, sessions, activeSessionId } = params;
+  const { isInTauri, hosts, sessions, activeSessionId, metricsDockEnabled } = params;
   const [hostStaticById, setHostStaticById] = useState<HostStaticStateMap>(() => loadStoredState());
   const [refreshingHostIds, setRefreshingHostIds] = useState<Record<string, boolean>>({});
   const [liveHostId, setLiveHostId] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export function useHostInsights(params: {
     load: [],
   });
   const autoStaticRefreshInFlight = useRef(new Set<string>());
+  const livePollInFlight = useRef<string | null>(null);
   const lastLiveHostIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -154,8 +156,19 @@ export function useHostInsights(params: {
       return;
     }
 
+    if (!metricsDockEnabled) {
+      lastLiveHostIdRef.current = null;
+      setLiveHostId(null);
+      setLiveInfo(null);
+      setLiveError(null);
+      setLiveLoading(false);
+      setLiveUpdatedAt(null);
+      setLiveHistory({ cpu: [], mem: [], load: [] });
+      return;
+    }
+
     const activeSession = sessions.find((session) => session.id === activeSessionId);
-    if (!activeSession || activeSession.status === "exited") {
+    if (!activeSession || activeSession.status !== "running") {
       lastLiveHostIdRef.current = null;
       setLiveHostId(null);
       setLiveInfo(null);
@@ -197,9 +210,12 @@ export function useHostInsights(params: {
 
     let cancelled = false;
     let first = true;
+    const pollKey = `${activeSession.id}:${host.id}`;
 
     const tick = async () => {
       if (cancelled) return;
+      if (livePollInFlight.current) return;
+      livePollInFlight.current = pollKey;
       if (first) setLiveLoading(true);
       try {
         const info = await invoke<HostLiveInfo>("host_probe_live", { host });
@@ -223,6 +239,7 @@ export function useHostInsights(params: {
         if (cancelled) return;
         setLiveError(normalizeError(error));
       } finally {
+        if (livePollInFlight.current === pollKey) livePollInFlight.current = null;
         if (!cancelled && first) setLiveLoading(false);
         first = false;
       }
@@ -238,7 +255,7 @@ export function useHostInsights(params: {
       window.clearInterval(timer);
       setLiveLoading(false);
     };
-  }, [isInTauri, hosts, sessions, activeSessionId]);
+  }, [isInTauri, metricsDockEnabled, hosts, sessions, activeSessionId]);
 
   const liveHost = useMemo(() => {
     if (!liveHostId) return null;

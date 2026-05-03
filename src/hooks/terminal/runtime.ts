@@ -7,7 +7,7 @@ import { getThemeMode, type ThemeMode } from "@/lib/theme";
 import { getTerminalTheme, type TerminalThemeId } from "@/lib/terminalTheme";
 import type { TerminalOptionsState } from "@/lib/terminalOptions";
 import type { Session } from "@/types/models";
-import type { SessionRuntimeRefs, SetActiveSessionId, TerminalRefs } from "@/hooks/terminal/types";
+import type { SessionRuntimeRefs, SessionTerminalHandle, SetActiveSessionId, TerminalRefs } from "@/hooks/terminal/types";
 import { takeSessionBuffer } from "@/hooks/terminal/sessionBuffer";
 import {
   markFirstTerminalReady,
@@ -32,7 +32,6 @@ type UseTerminalRuntimeParams = {
 };
 
 type PtySizeState = {
-  sessionId: string;
   cols: number;
   rows: number;
 };
@@ -59,8 +58,9 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   const fitTimerRef = useRef<number | null>(null);
   const fitRafRef = useRef<number | null>(null);
-  const lastSentPtySizeRef = useRef<PtySizeState | null>(null);
+  const lastSentPtySizeBySessionRef = useRef(new Map<string, PtySizeState>());
   const bindSessionTerminalRefCache = useRef(new Map<string, (node: HTMLDivElement | null) => void>());
+  const sessionBellDisposables = useRef(new Map<string, { dispose(): void }>());
   const didMarkFirstTerminalReadyRef = useRef(false);
 
   const isInTauriRef = useRef(isInTauri);
@@ -68,6 +68,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   const terminalThemeIdRef = useRef(terminalThemeId);
   const terminalOptionsRef = useRef(terminalOptions);
   const sessionsCountRef = useRef(sessions.length);
+  const sessionsByIdRef = useRef(new Map<string, Session>());
 
   useEffect(() => {
     isInTauriRef.current = isInTauri;
@@ -87,7 +88,8 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     sessionsCountRef.current = sessions.length;
-  }, [sessions.length]);
+    sessionsByIdRef.current = new Map(sessions.map((session) => [session.id, session]));
+  }, [sessions]);
 
   function clearScheduledFit() {
     if (fitTimerRef.current !== null) {
@@ -114,6 +116,31 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     } catch (error) {
       console.debug("[xterm] fit skipped", error);
       return false;
+    }
+  }
+
+  function playTerminalBell() {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    try {
+      const context = new AudioContextCtor();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const now = context.currentTime;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.13);
+      oscillator.onended = () => {
+        void context.close().catch(() => undefined);
+      };
+    } catch (error) {
+      console.debug("[xterm] bell skipped", error);
     }
   }
 
@@ -165,22 +192,14 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
   }
 
-  function fitAndResizeActivePty() {
-    const sessionId = terminalRefs.activeSessionIdRef.current;
-    const handle = sessionId ? terminalRefs.sessionTerminals.current.get(sessionId) : null;
-    if (!sessionId || !handle) return;
-
-    recordFitCall();
-    const fitOk = safeFit(handle.fitAddon);
-    if (!fitOk) return;
-
+  function resizePtyIfNeeded(sessionId: string, handle: SessionTerminalHandle) {
     if (!isInTauriRef.current) return;
     const nextCols = handle.terminal.cols;
     const nextRows = handle.terminal.rows;
-    const prev = lastSentPtySizeRef.current;
-    if (prev && prev.sessionId === sessionId && prev.cols === nextCols && prev.rows === nextRows) return;
+    const prev = lastSentPtySizeBySessionRef.current.get(sessionId);
+    if (prev && prev.cols === nextCols && prev.rows === nextRows) return;
 
-    lastSentPtySizeRef.current = { sessionId, cols: nextCols, rows: nextRows };
+    lastSentPtySizeBySessionRef.current.set(sessionId, { cols: nextCols, rows: nextRows });
     recordPtyResize(nextCols, nextRows);
     invoke("pty_resize", {
       sessionId,
@@ -188,8 +207,18 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       rows: nextRows,
     }).catch((error) => {
       console.error("[pty] resize error", error);
-      lastSentPtySizeRef.current = null;
+      lastSentPtySizeBySessionRef.current.delete(sessionId);
     });
+  }
+
+  function fitAndResizeMountedPtys() {
+    for (const [sessionId, handle] of terminalRefs.sessionTerminals.current) {
+      if (sessionsByIdRef.current.get(sessionId)?.status === "exited") continue;
+      recordFitCall();
+      const fitOk = safeFit(handle.fitAddon);
+      if (!fitOk) continue;
+      resizePtyIfNeeded(sessionId, handle);
+    }
   }
 
   function scheduleFitAndResize(delayMs = 50) {
@@ -204,7 +233,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       }
       fitRafRef.current = window.requestAnimationFrame(() => {
         fitRafRef.current = null;
-        fitAndResizeActivePty();
+        fitAndResizeMountedPtys();
       });
     }, Math.max(0, delayMs));
   }
@@ -240,6 +269,11 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
       if (!isInTauriRef.current) return;
       invoke("pty_write", { sessionId, data }).catch((error) => console.error("[pty] write error", error));
     });
+    const bellDisposable = term.onBell(() => {
+      if (terminalOptionsRef.current.bellStyle !== "sound") return;
+      playTerminalBell();
+    });
+    sessionBellDisposables.current.set(sessionId, bellDisposable);
 
     terminalRefs.sessionTerminals.current.set(sessionId, { terminal: term, fitAddon, inputDisposable });
     syncActiveTerminalHandle();
@@ -284,6 +318,8 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
 
     handle.inputDisposable.dispose();
+    sessionBellDisposables.current.get(sessionId)?.dispose();
+    sessionBellDisposables.current.delete(sessionId);
     try {
       handle.terminal.dispose();
     } catch {
@@ -291,9 +327,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
 
     terminalRefs.sessionTerminals.current.delete(sessionId);
-    if (terminalRefs.activeSessionIdRef.current === sessionId) {
-      lastSentPtySizeRef.current = null;
-    }
+    lastSentPtySizeBySessionRef.current.delete(sessionId);
     syncActiveTerminalHandle();
   }
 
@@ -316,7 +350,6 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     terminalRefs.activeSessionIdRef.current = activeSessionId;
-    lastSentPtySizeRef.current = null;
     syncActiveTerminalHandle();
     applyTerminalOptions();
   }, [activeSessionId]);
@@ -393,7 +426,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
         // ignore
       }
     };
-  }, [isInTauri, activeSessionId]);
+  }, [isInTauri]);
 
   useEffect(() => {
     const element = terminalRefs.terminalContainerRef.current;
@@ -407,7 +440,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     return () => {
       observer.disconnect();
     };
-  }, [isInTauri, activeSessionId]);
+  }, [isInTauri]);
 
   useEffect(() => {
     if (!activeSessionId) {

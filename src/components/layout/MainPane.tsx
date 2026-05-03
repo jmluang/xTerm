@@ -313,24 +313,43 @@ export function MainPane(props: {
           style={{ WebkitAppRegion: "drag" } as any}
         >
           {sessions.length > 0 ? (
-            <div className="flex items-center gap-1 overflow-x-auto h-full max-w-[min(720px,60vw)]">
+            <div
+              className="flex items-center gap-1 overflow-x-auto h-full max-w-[min(720px,60vw)]"
+              role="tablist"
+              aria-label="Terminal sessions"
+              data-tauri-drag-region="false"
+              style={{ WebkitAppRegion: "no-drag" } as any}
+            >
               {sessions.map((session) => {
                 const active = session.id === activeSessionId;
                 const exited = session.status === "exited";
                 const starting = session.status === "starting";
                 const idx = sessionIndexById.get(session.id) ?? 1;
+                const switchToAdjacentSession = (direction: "prev" | "next" | "first" | "last") => {
+                  const currentIndex = sessions.findIndex((item) => item.id === session.id);
+                  if (currentIndex < 0) return;
+                  const nextIndex =
+                    direction === "first"
+                      ? 0
+                      : direction === "last"
+                        ? sessions.length - 1
+                        : direction === "next"
+                          ? (currentIndex + 1) % sessions.length
+                          : (currentIndex - 1 + sessions.length) % sessions.length;
+                  const nextSession = sessions[nextIndex];
+                  if (nextSession) setActiveSessionId(nextSession.id);
+                };
                 return (
                   <div
                     key={session.id}
                     className={[
-                      "group shrink-0 inline-flex items-center gap-2 h-7 px-2 rounded-lg cursor-pointer",
+                      "group shrink-0 inline-flex items-center h-7 rounded-lg",
                       exited
                         ? "bg-[var(--app-chip-failed)] hover:bg-[var(--app-chip-failed-hover)] text-[var(--app-chip-failed-text)] ring-1 ring-red-500/10"
                         : active
                           ? "bg-[var(--app-chip-active)] text-foreground"
                           : "bg-[var(--app-chip)] hover:bg-[var(--app-chip-hover)] text-foreground",
                     ].join(" ")}
-                    onClick={() => setActiveSessionId(session.id)}
                     title={
                       exited
                         ? `${session.hostAlias} #${idx} (exited${typeof session.exitCode === "number" ? `, code ${session.exitCode}` : ""})`
@@ -338,14 +357,42 @@ export function MainPane(props: {
                           ? `${session.hostAlias} #${idx} (connecting...)`
                           : `${session.hostAlias} #${idx}`
                     }
-                    aria-label={`Switch to ${session.hostAlias}`}
-                    data-tauri-drag-region
-                    style={{ WebkitAppRegion: "drag" } as any}
+                    data-tauri-drag-region="false"
+                    style={{ WebkitAppRegion: "no-drag" } as any}
                   >
-                    {exited ? <span className="h-2 w-2 rounded-full bg-red-500/70" aria-hidden="true" /> : null}
-                    {starting ? <span className="h-2 w-2 rounded-full bg-amber-400/80" aria-hidden="true" /> : null}
-                    {idx > 1 ? <span className="text-[11px] font-semibold opacity-70">#{idx}</span> : null}
-                    <span className="text-sm font-semibold leading-none whitespace-nowrap">{session.hostAlias}</span>
+                    <button
+                      type="button"
+                      role="tab"
+                      id={`session-tab-${session.id}`}
+                      aria-selected={active}
+                      aria-controls={`session-panel-${session.id}`}
+                      tabIndex={active ? 0 : -1}
+                      className="h-full min-w-0 inline-flex items-center gap-2 pl-2 pr-1 rounded-l-lg text-left"
+                      onClick={() => setActiveSessionId(session.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowRight") {
+                          e.preventDefault();
+                          switchToAdjacentSession("next");
+                        } else if (e.key === "ArrowLeft") {
+                          e.preventDefault();
+                          switchToAdjacentSession("prev");
+                        } else if (e.key === "Home") {
+                          e.preventDefault();
+                          switchToAdjacentSession("first");
+                        } else if (e.key === "End") {
+                          e.preventDefault();
+                          switchToAdjacentSession("last");
+                        }
+                      }}
+                      aria-label={`Switch to ${session.hostAlias}`}
+                      data-tauri-drag-region="false"
+                      style={{ WebkitAppRegion: "no-drag" } as any}
+                    >
+                      {exited ? <span className="h-2 w-2 rounded-full bg-red-500/70" aria-hidden="true" /> : null}
+                      {starting ? <span className="h-2 w-2 rounded-full bg-amber-400/80" aria-hidden="true" /> : null}
+                      {idx > 1 ? <span className="text-[11px] font-semibold opacity-70">#{idx}</span> : null}
+                      <span className="text-sm font-semibold leading-none whitespace-nowrap">{session.hostAlias}</span>
+                    </button>
                     <button
                       type="button"
                       className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/60 inline-flex items-center justify-center"
@@ -429,6 +476,10 @@ export function MainPane(props: {
                 return (
                   <div
                     key={session.id}
+                    id={`session-panel-${session.id}`}
+                    role="tabpanel"
+                    aria-labelledby={`session-tab-${session.id}`}
+                    aria-hidden={!active}
                     ref={bindSessionTerminalRef(session.id)}
                     className="absolute inset-0 h-full w-full"
                     style={

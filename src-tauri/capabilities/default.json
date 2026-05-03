@@ -13,8 +13,7 @@
     "core:window:allow-set-background-color",
     "core:window:allow-set-theme",
     "core:window:allow-start-dragging",
-    "shell:allow-open",
-    "process:default",
+    "process:allow-restart",
     "updater:default",
     "dialog:default",
     "dialog:allow-open"

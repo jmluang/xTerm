@@ -8,7 +8,9 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use window_vibrancy::{
+                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                };
 
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = apply_vibrancy(
@@ -43,10 +45,9 @@ pub fn run() {
             crate::host_probe::host_probe_live,
             crate::webdav_sync::webdav_pull,
             crate::webdav_sync::webdav_push,
-            crate::credential_store::host_password_get,
             crate::credential_store::host_password_set,
             crate::credential_store::host_password_delete,
-            crate::pty::pty_spawn,
+            crate::pty::pty_spawn_ssh,
             crate::pty::pty_write,
             crate::pty::pty_resize,
             crate::pty::pty_kill,

@@ -72,9 +72,25 @@ export function WebdavSyncDialog(props: {
               <Input
                 type="password"
                 value={settings.webdav_password ?? ""}
-                onChange={(e) => setSettings((s) => ({ ...s, webdav_password: e.target.value }))}
-                placeholder=""
+                onChange={(e) => setSettings((s) => ({ ...s, webdav_password: e.target.value, webdav_password_clear: false }))}
+                placeholder={settings.has_webdav_password ? "Leave blank to keep saved password" : ""}
               />
+              {settings.has_webdav_password ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    setSettings((s) => ({
+                      ...s,
+                      has_webdav_password: false,
+                      webdav_password: "",
+                      webdav_password_clear: true,
+                    }))
+                  }
+                >
+                  Clear
+                </Button>
+              ) : null}
             </div>
           </div>
 

@@ -554,15 +554,39 @@ export function SettingsPanel(props: {
                         placeholder=""
                       />
                     </div>
-                    <div className="grid gap-2">
-                      <label className="text-xs text-muted-foreground">Password</label>
-                      <Input
-                        type="password"
-                        value={settings.webdav_password ?? ""}
-                        onChange={(event) => setSettings((prev) => ({ ...prev, webdav_password: event.target.value }))}
-                        placeholder=""
-                      />
-                    </div>
+	                    <div className="grid gap-2">
+	                      <label className="text-xs text-muted-foreground">Password</label>
+	                      <div className="flex items-center gap-2">
+	                        <Input
+	                          type="password"
+	                          value={settings.webdav_password ?? ""}
+	                          onChange={(event) =>
+	                            setSettings((prev) => ({
+	                              ...prev,
+	                              webdav_password: event.target.value,
+	                              webdav_password_clear: false,
+	                            }))
+	                          }
+	                          placeholder={settings.has_webdav_password ? "Leave blank to keep saved password" : ""}
+	                        />
+	                        {settings.has_webdav_password ? (
+	                          <Button
+	                            type="button"
+	                            variant="outline"
+	                            onClick={() =>
+	                              setSettings((prev) => ({
+	                                ...prev,
+	                                has_webdav_password: false,
+	                                webdav_password: "",
+	                                webdav_password_clear: true,
+	                              }))
+	                            }
+	                          >
+	                            Clear
+	                          </Button>
+	                        ) : null}
+	                      </div>
+	                    </div>
                   </div>
                 </div>
 

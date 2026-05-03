@@ -1,5 +1,21 @@
 use url::Url;
 
+fn is_loopback_host(url: &Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+    )
+}
+
+fn validate_webdav_transport(url: &Url) -> Result<(), String> {
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if is_loopback_host(url) => Ok(()),
+        "http" => Err("WebDAV URL must use HTTPS unless it targets localhost".to_string()),
+        scheme => Err(format!("Unsupported WebDAV URL scheme: {scheme}")),
+    }
+}
+
 pub(crate) fn webdav_resolve_url(input: &str, filename: &str) -> Result<String, String> {
     let raw = input.trim();
     if raw.is_empty() {
@@ -7,6 +23,7 @@ pub(crate) fn webdav_resolve_url(input: &str, filename: &str) -> Result<String, 
     }
 
     let mut url = Url::parse(raw).map_err(|e| format!("Invalid WebDAV URL: {e}"))?;
+    validate_webdav_transport(&url)?;
     let path = url.path().to_string();
 
     let last_seg = path.rsplit('/').next().unwrap_or("");
@@ -50,6 +67,7 @@ pub(crate) fn webdav_resolve_url_with_folder(
     let folder = folder.unwrap_or("").trim().trim_matches('/');
 
     let u0 = Url::parse(raw).map_err(|e| format!("Invalid WebDAV URL: {e}"))?;
+    validate_webdav_transport(&u0)?;
     let path0 = u0.path().to_string();
     let last0 = path0.rsplit('/').next().unwrap_or("");
     let looks_like_file_url =
@@ -107,5 +125,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got, "https://dav.example.com/dav/hosts.db");
+    }
+
+    #[test]
+    fn reject_remote_http_webdav_urls() {
+        let err = webdav_resolve_url_with_folder(
+            "http://dav.example.com/dav/",
+            Some("xTermius"),
+            "hosts.json",
+        )
+        .unwrap_err();
+        assert!(err.contains("HTTPS"));
+    }
+
+    #[test]
+    fn allow_loopback_http_webdav_urls_for_development() {
+        let got = webdav_resolve_url_with_folder(
+            "http://127.0.0.1:8080/dav/",
+            Some("xTermius"),
+            "hosts.json",
+        )
+        .unwrap();
+        assert_eq!(got, "http://127.0.0.1:8080/dav/xTermius/hosts.json");
     }
 }

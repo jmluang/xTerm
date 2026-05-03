@@ -42,9 +42,6 @@ export type TerminalRefs = {
 
 export type SessionRuntimeRefs = {
   sessionBuffers: MutableRefObject<Map<string, SessionBuffer>>;
-  sessionAutoPasswords: MutableRefObject<Map<string, string>>;
-  sessionPromptTails: MutableRefObject<Map<string, string>>;
-  sessionAutoPasswordSent: MutableRefObject<Set<string>>;
   sessionHadAnyOutput: MutableRefObject<Set<string>>;
   sessionConnectTimers: MutableRefObject<Map<string, number>>;
   sessionMeta: MutableRefObject<Map<string, SessionMeta>>;

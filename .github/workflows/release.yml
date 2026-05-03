@@ -5,9 +5,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and finalize, for example v0.3.2"
+        required: true
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -15,7 +20,7 @@ permissions:
 
 jobs:
   build:
-    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v') && github.event.inputs.tag != 'v')
     permissions:
       contents: write
     strategy:
@@ -32,21 +37,21 @@ jobs:
     steps:
       - name: Derive release version from tag
         run: |
-          echo "RELEASE_TAG=" >> "$GITHUB_ENV"
-          echo "RELEASE_VERSION=" >> "$GITHUB_ENV"
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"
-            if [[ -n "${VERSION}" ]]; then
-              echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-              echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
-              echo "Release tag: ${TAG}"
-              echo "Release version: ${VERSION}"
-            else
-              echo "Ignoring invalid release tag: ${TAG}"
-            fi
+          RELEASE_TAG="${{ github.event.inputs.tag }}"
+          if [[ -z "${RELEASE_TAG}" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
           fi
+
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v1.2.3: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "$GITHUB_ENV"
+          echo "Release tag: ${RELEASE_TAG}"
+          echo "Release version: ${RELEASE_VERSION}"
 
       - name: Inspect current release state and target assets
         id: inspect_release
@@ -70,13 +75,6 @@ jobs:
           echo "assets_complete=false" >> "$GITHUB_OUTPUT"
           echo "release_draft=true" >> "$GITHUB_OUTPUT"
 
-          if [[ -z "${RELEASE_VERSION}" ]]; then
-            echo "state=invalid" >> "$GITHUB_OUTPUT"
-            echo "assets_complete=true" >> "$GITHUB_OUTPUT"
-            echo "Release tag is invalid; skipping target build."
-            exit 0
-          fi
-
           REQUIRED_ASSETS=(
             "xTermius_${RELEASE_VERSION}_${RELEASE_ARCH}.dmg"
             "xTermius_${RELEASE_ARCH}.app.tar.gz"
@@ -84,7 +82,7 @@ jobs:
           )
 
           ERROR_LOG="$(mktemp)"
-          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
+          if RELEASE_IS_DRAFT="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
             if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
               echo "state=draft" >> "$GITHUB_OUTPUT"
               echo "release_draft=true" >> "$GITHUB_OUTPUT"
@@ -95,7 +93,7 @@ jobs:
               echo "Release state: published"
             fi
 
-            ASSETS="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+            ASSETS="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
             MISSING_ASSETS=()
             for ASSET in "${REQUIRED_ASSETS[@]}"; do
               if ! grep -Fxq "${ASSET}" <<<"${ASSETS}"; then
@@ -125,6 +123,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -135,11 +134,47 @@ jobs:
           cache: npm
 
       - name: Sync app versions from tag
-        if: steps.inspect_release.outputs.assets_complete != 'true' && env.RELEASE_VERSION != ''
+        if: steps.inspect_release.outputs.assets_complete != 'true'
         run: |
-          node -e "const fs=require('fs'); const p='package.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
-          node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
-          node -e 'const fs=require("fs"); const p="src-tauri/Cargo.toml"; let s=fs.readFileSync(p,"utf8"); s=s.replace(/(^version\\s*=\\s*")[^"]+("\\s*$)/m, "$1"+process.env.RELEASE_VERSION+"$2"); fs.writeFileSync(p, s);'
+          node <<'NODE'
+          const fs = require("fs");
+          const version = process.env.RELEASE_VERSION;
+
+          function writeJson(filePath, update) {
+            const json = JSON.parse(fs.readFileSync(filePath, "utf8"));
+            update(json);
+            fs.writeFileSync(filePath, `${JSON.stringify(json, null, 2)}\n`);
+          }
+
+          writeJson("package.json", (json) => {
+            json.version = version;
+          });
+
+          writeJson("package-lock.json", (json) => {
+            json.version = version;
+            if (json.packages?.[""]) {
+              json.packages[""].version = version;
+            }
+          });
+
+          writeJson("src-tauri/tauri.conf.json", (json) => {
+            json.version = version;
+          });
+
+          const cargoTomlPath = "src-tauri/Cargo.toml";
+          const cargoToml = fs.readFileSync(cargoTomlPath, "utf8").replace(
+            /(^version\s*=\s*")[^"]+("\s*$)/m,
+            `$1${version}$2`
+          );
+          fs.writeFileSync(cargoTomlPath, cargoToml);
+
+          const cargoLockPath = "src-tauri/Cargo.lock";
+          const cargoLock = fs.readFileSync(cargoLockPath, "utf8").replace(
+            /(\[\[package\]\]\s+name = "xtermius"\s+version = ")[^"]+(")/,
+            `$1${version}$2`
+          );
+          fs.writeFileSync(cargoLockPath, cargoLock);
+          NODE
           echo "Version files synchronized to ${RELEASE_VERSION}"
 
       - name: Setup Rust
@@ -152,8 +187,16 @@ jobs:
         if: steps.inspect_release.outputs.assets_complete != 'true'
         run: npm ci
 
+      - name: Run release regression tests
+        if: steps.inspect_release.outputs.assets_complete != 'true'
+        run: |
+          npm run test:security
+          npm run test:frontend-regressions
+          EXPECTED_RELEASE_VERSION="${RELEASE_VERSION}" npm run test:updater
+          EXPECTED_RELEASE_VERSION="${RELEASE_VERSION}" npm run test:release-workflow
+
       - name: Build and publish Tauri release
-        if: steps.inspect_release.outputs.assets_complete != 'true' && env.RELEASE_TAG != ''
+        if: steps.inspect_release.outputs.assets_complete != 'true'
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -171,18 +214,36 @@ jobs:
 
   finalize_release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'v' && needs.build.result == 'success'
+    if: needs.build.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v') && github.event.inputs.tag != 'v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Derive release version from tag
+        run: |
+          RELEASE_TAG="${{ github.event.inputs.tag }}"
+          if [[ -z "${RELEASE_TAG}" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v1.2.3: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "$GITHUB_ENV"
+          echo "Release tag: ${RELEASE_TAG}"
+          echo "Release version: ${RELEASE_VERSION}"
+
       - name: Inspect current release state
         id: inspect_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ERROR_LOG="$(mktemp)"
-          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
+          if RELEASE_IS_DRAFT="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
             if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
               echo "state=draft" >> "$GITHUB_OUTPUT"
               echo "Release state: draft"
@@ -200,24 +261,14 @@ jobs:
             fi
           fi
 
-      - name: Derive release version from tag
-        run: |
-          echo "RELEASE_VERSION=" >> "$GITHUB_ENV"
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            if [[ -n "${VERSION}" ]]; then
-              echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
-            fi
-          fi
-
       - name: Fail if release is missing
         if: steps.inspect_release.outputs.state == 'missing'
         run: |
-          echo "Release ${GITHUB_REF_NAME} is missing, cannot finalize." >&2
+          echo "Release ${RELEASE_TAG} is missing, cannot finalize." >&2
           exit 1
 
-      - name: Validate release assets
-        if: steps.inspect_release.outputs.state != 'missing' && env.RELEASE_VERSION != ''
+      - name: Validate release assets and latest.json
+        if: steps.inspect_release.outputs.state != 'missing'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -231,7 +282,7 @@ jobs:
             "xTermius_x64.app.tar.gz.sig"
           )
 
-          ASSETS="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          ASSETS="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
           MISSING_ASSETS=()
           for ASSET in "${REQUIRED_ASSETS[@]}"; do
             if ! grep -Fxq "${ASSET}" <<<"${ASSETS}"; then
@@ -246,23 +297,51 @@ jobs:
 
           ASSET_DIR="${RUNNER_TEMP}/release-assets"
           mkdir -p "${ASSET_DIR}"
-          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --pattern latest.json --dir "${ASSET_DIR}" --clobber
+          gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern latest.json --dir "${ASSET_DIR}" --clobber
+
+          LATEST_JSON="${ASSET_DIR}/latest.json"
+          LATEST_VERSION="$(jq -r '.version // empty' "${LATEST_JSON}")"
+          if [[ "${LATEST_VERSION}" != "${RELEASE_VERSION}" ]]; then
+            echo "latest.json version ${LATEST_VERSION} does not match ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+
+          jq -e '.platforms and (.platforms | type == "object")' "${LATEST_JSON}" >/dev/null
 
           for PLATFORM in darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app; do
-            if ! grep -q "\"${PLATFORM}\"" "${ASSET_DIR}/latest.json"; then
-              echo "latest.json is missing platform entry ${PLATFORM}" >&2
+            URL="$(jq -r --arg platform "${PLATFORM}" '.platforms[$platform].url // empty' "${LATEST_JSON}")"
+            SIGNATURE="$(jq -r --arg platform "${PLATFORM}" '.platforms[$platform].signature // empty' "${LATEST_JSON}")"
+
+            if [[ -z "${URL}" ]]; then
+              echo "latest.json is missing URL for ${PLATFORM}" >&2
+              exit 1
+            fi
+
+            if [[ "${URL}" != *"/releases/download/${RELEASE_TAG}/"* ]]; then
+              echo "latest.json URL for ${PLATFORM} does not point at ${RELEASE_TAG}: ${URL}" >&2
+              exit 1
+            fi
+
+            if [[ -z "${SIGNATURE}" ]]; then
+              echo "latest.json is missing signature for ${PLATFORM}" >&2
+              exit 1
+            fi
+
+            URL_BASENAME="$(basename "${URL}")"
+            if ! grep -Fxq "${URL_BASENAME}" <<<"${ASSETS}"; then
+              echo "latest.json URL asset for ${PLATFORM} is not attached to the release: ${URL_BASENAME}" >&2
               exit 1
             fi
           done
 
-          echo "Release assets validated."
+          echo "Release assets and latest.json validated."
 
       - name: Publish draft release
         if: steps.inspect_release.outputs.state == 'draft'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+        run: gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
 
       - name: Release already published
         if: steps.inspect_release.outputs.state == 'published'
-        run: echo "Release ${GITHUB_REF_NAME} is already published"
+        run: echo "Release ${RELEASE_TAG} is already published"

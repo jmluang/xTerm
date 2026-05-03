@@ -35,9 +35,6 @@ export function useTerminalSessions(params: {
   const resizeDebounceTimer = useRef<number | null>(null);
 
   const sessionBuffers = useRef<Map<string, SessionBuffer>>(new Map());
-  const sessionAutoPasswords = useRef(new Map<string, string>());
-  const sessionPromptTails = useRef(new Map<string, string>());
-  const sessionAutoPasswordSent = useRef(new Set<string>());
   const sessionHadAnyOutput = useRef(new Set<string>());
   const sessionConnectTimers = useRef(new Map<string, number>());
   const sessionMeta = useRef(new Map<string, { hostId: string; hostLabel: string; startedAt: number }>());
@@ -59,9 +56,6 @@ export function useTerminalSessions(params: {
   const runtimeRefs = useMemo<SessionRuntimeRefs>(
     () => ({
       sessionBuffers,
-      sessionAutoPasswords,
-      sessionPromptTails,
-      sessionAutoPasswordSent,
       sessionHadAnyOutput,
       sessionConnectTimers,
       sessionMeta,

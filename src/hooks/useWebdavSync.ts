@@ -66,6 +66,7 @@ export function useWebdavSync(params: {
     setSyncNotice(null);
     try {
       await invoke("settings_save", { settings });
+      await refreshSettingsFromBackend();
       await invoke("hosts_save", { hosts: hostList });
       await invoke("webdav_push");
       setSyncNotice({ kind: "ok", text: "Pushed" });
@@ -89,6 +90,7 @@ export function useWebdavSync(params: {
     setSyncNotice(null);
     try {
       await invoke("settings_save", { settings });
+      await refreshSettingsFromBackend();
       setSyncNotice({ kind: "ok", text: "Saved" });
     } catch (e) {
       const msg = `Failed to save settings.\n\n${String(e)}`;

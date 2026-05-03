@@ -1,14 +1,15 @@
-use crate::credential_store::host_password_get;
+use crate::credential_store::keychain_get_password;
 use crate::models::Host;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,20 +104,33 @@ fn target_of(host: &Host) -> String {
 }
 
 fn create_askpass_script(password: &str) -> Result<PathBuf, String> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("xtermius-askpass-{nonce}.sh"));
     let script = format!("#!/bin/sh\nprintf '%s\\n' {}\n", shell_quote(password));
-    fs::write(&path, script).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+
+    for attempt in 0..16 {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("xtermius-askpass-{nonce}-{attempt}.sh"));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            options.mode(0o700);
+        }
+
+        match options.open(&path) {
+            Ok(mut file) => {
+                file.write_all(script.as_bytes())
+                    .map_err(|e| e.to_string())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
     }
-    Ok(path)
+
+    Err("failed to create askpass script".to_string())
 }
 
 fn run_probe(host: &Host, script: &str) -> Result<String, String> {
@@ -131,7 +145,7 @@ fn run_probe(host: &Host, script: &str) -> Result<String, String> {
         "-o".to_string(),
         "ConnectionAttempts=1".to_string(),
         "-o".to_string(),
-        "StrictHostKeyChecking=accept-new".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "ServerAliveInterval=10".to_string(),
         "-o".to_string(),
@@ -142,19 +156,33 @@ fn run_probe(host: &Host, script: &str) -> Result<String, String> {
         args.push("-p".to_string());
         args.push(host.port.to_string());
     }
-    if let Some(path) = host.identity_file.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(path) = host
+        .identity_file
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         args.push("-i".to_string());
         args.push(path.to_string());
     }
-    if let Some(jump) = host.proxy_jump.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    if let Some(jump) = host
+        .proxy_jump
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         args.push("-J".to_string());
         args.push(jump.to_string());
     }
 
     let mut askpass_path: Option<PathBuf> = None;
     let mut cmd = Command::new("/usr/bin/ssh");
-    let maybe_password = host_password_get(host.id.clone()).ok().flatten();
-    if let Some(password) = maybe_password.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    let maybe_password = keychain_get_password(&host.id).ok().flatten();
+    if let Some(password) = maybe_password
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let p = create_askpass_script(password)?;
         askpass_path = Some(p.clone());
         args.push("-o".to_string());

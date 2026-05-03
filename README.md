@@ -49,20 +49,26 @@ This includes:
 - resize/fitting counters and jitter count
 - memory samples by session count
 
-## GitHub Auto DMG Build
+## GitHub CI and Release
 
-This repo includes a GitHub Actions workflow:
+This repo uses two GitHub Actions workflows:
 
-- file: `.github/workflows/build-dmg.yml`
-- trigger:
-  - push to `main` / `master`: build DMG and upload as workflow artifact
-  - push tag `v*` (for example `v0.1.0`): build DMG and publish it to GitHub Releases
+- `.github/workflows/ci.yml`: runs `npm ci`, `npm run build`, updater regression checks, release workflow regression checks, and Rust tests.
+- `.github/workflows/release.yml`: builds and publishes the dual-architecture macOS release.
+
+The release workflow runs on `v*` tag pushes or manual dispatch with a `tag` input. It builds:
+
+- Apple Silicon (`aarch64-apple-darwin`) DMG and updater archive.
+- Intel (`x86_64-apple-darwin`) DMG and updater archive.
+- `latest.json` plus updater signatures for the Tauri updater.
+
+Before publishing a draft release, the finalizer checks that `latest.json` matches the release version, points platform URLs at the current tag, has non-empty signatures, and references assets attached to the GitHub Release.
 
 Typical release flow:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.3.3
+git push origin v0.3.3
 ```
 
 ## Icons

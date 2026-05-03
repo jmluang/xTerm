@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { configDir } from "@tauri-apps/api/path";
-import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import type { Host } from "@/types/models";
 import type {
   SessionCloseReason,
@@ -41,9 +40,6 @@ export function useSessionActions(params: UseSessionActionsParams) {
     params;
   const {
     sessionBuffers,
-    sessionAutoPasswords,
-    sessionPromptTails,
-    sessionAutoPasswordSent,
     sessionHadAnyOutput,
     sessionConnectTimers,
     sessionMeta,
@@ -61,9 +57,6 @@ export function useSessionActions(params: UseSessionActionsParams) {
     }
     if (reason === "user") {
       sessionBuffers.current.delete(sessionId);
-      sessionPromptTails.current.delete(sessionId);
-      sessionAutoPasswords.current.delete(sessionId);
-      sessionAutoPasswordSent.current.delete(sessionId);
       setSessions((prev) => prev.filter((session) => session.id !== sessionId));
       if (activeSessionId === sessionId) setActiveSessionId(null);
     }
@@ -95,19 +88,6 @@ export function useSessionActions(params: UseSessionActionsParams) {
     }
 
     try {
-      let savedPassword: string | null = null;
-      if (host.hasPassword) {
-        try {
-          savedPassword = await invoke<string | null>("host_password_get", { hostId: host.id });
-        } catch (error) {
-          console.debug("[keychain] get password failed", error);
-        }
-      }
-      if ((!savedPassword || !savedPassword.trim()) && host.password && host.password.trim()) {
-        // Fallback for non-Tauri/local test data or legacy in-memory hosts that still carry plaintext.
-        savedPassword = host.password;
-      }
-
       const startedAt = Date.now();
       setConnectingHosts((prev) => {
         const current = prev[host.id];
@@ -115,10 +95,6 @@ export function useSessionActions(params: UseSessionActionsParams) {
         const count = (current?.count ?? 0) + 1;
         return { ...prev, [host.id]: { stage: "config", startedAt: startedAt0, count } };
       });
-
-      const configDirPath = await withTimeout(configDir().catch(() => ""), 5000, "configDir()");
-      const sshConfigPath = `${configDirPath}/xtermius/ssh_config`;
-      const targetAlias = host.alias || host.hostname;
 
       setConnectingHosts((prev) => {
         const current = prev[host.id];
@@ -138,11 +114,8 @@ export function useSessionActions(params: UseSessionActionsParams) {
       });
 
       const sessionId = await withTimeout(
-        invoke<string>("pty_spawn", {
-          file: "/usr/bin/ssh",
-          args: ["-F", sshConfigPath, "-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1", targetAlias],
-          cwd: null,
-          env: {},
+        invoke<string>("pty_spawn_ssh", {
+          hostId: host.id,
           cols,
           rows,
         }),
@@ -172,21 +145,6 @@ export function useSessionActions(params: UseSessionActionsParams) {
         if (confirmed) await closeSession(sessionId.toString(), "timeout");
       }, 15_000);
       sessionConnectTimers.current.set(sessionId.toString(), connectTimer);
-
-      if (savedPassword && savedPassword.trim()) {
-        sessionAutoPasswords.current.set(sessionId.toString(), savedPassword);
-        sessionAutoPasswordSent.current.delete(sessionId.toString());
-        sessionPromptTails.current.delete(sessionId.toString());
-      } else if (host.hasPassword) {
-        try {
-          await message(
-            `No saved password found in Keychain for "${host.alias || host.hostname}".\n\nPasswords are stored per-device.\nPlease enter the password in the Host and save it again on this device.`,
-            { title: "Password Needed", kind: "info" }
-          );
-        } catch {
-          // ignore
-        }
-      }
 
       setSessions((prev) => [
         ...prev,
