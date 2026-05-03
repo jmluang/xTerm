@@ -66,6 +66,11 @@ check("CI workflow runs frontend, Rust, and updater regression checks", () => {
     ],
     ".github/workflows/ci.yml"
   );
+  assert.match(
+    workflow,
+    /EXPECTED_RELEASE_VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"\s+npm run test:updater/,
+    "CI updater regressions must use the checked-out package version instead of relying on fetched git tags"
+  );
 });
 
 check("workflow_dispatch is either removed or has an explicit tag input", () => {

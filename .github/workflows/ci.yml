@@ -40,7 +40,8 @@ jobs:
         run: npm run test:frontend-regressions
 
       - name: Run updater regressions
-        run: npm run test:updater
+        run: |
+          EXPECTED_RELEASE_VERSION="$(node -p "require('./package.json').version")" npm run test:updater
 
       - name: Run release workflow regressions
         run: npm run test:release-workflow
