@@ -30,39 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Inspect current release state
-        id: inspect_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ERROR_LOG="$(mktemp)"
-          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
-            if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
-              echo "state=draft" >> "$GITHUB_OUTPUT"
-              echo "Release state: draft"
-            else
-              echo "state=published" >> "$GITHUB_OUTPUT"
-              echo "Release state: published"
-            fi
-          else
-            if grep -qiE '404|not found|release not found' "${ERROR_LOG}"; then
-              echo "state=missing" >> "$GITHUB_OUTPUT"
-              echo "Release state: missing"
-            else
-              cat "${ERROR_LOG}" >&2
-              exit 1
-            fi
-          fi
-
-      - name: Checkout
-        if: steps.inspect_release.outputs.state != 'published'
-        uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
       - name: Derive release version from tag
-        if: steps.inspect_release.outputs.state != 'published'
         run: |
           echo "RELEASE_TAG=" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=" >> "$GITHUB_ENV"
@@ -80,15 +48,94 @@ jobs:
             fi
           fi
 
+      - name: Inspect current release state and target assets
+        id: inspect_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              RELEASE_ARCH="aarch64"
+              ;;
+            x86_64-apple-darwin)
+              RELEASE_ARCH="x64"
+              ;;
+            *)
+              echo "Unsupported release target: ${{ matrix.target }}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "release_arch=${RELEASE_ARCH}" >> "$GITHUB_OUTPUT"
+          echo "assets_complete=false" >> "$GITHUB_OUTPUT"
+          echo "release_draft=true" >> "$GITHUB_OUTPUT"
+
+          if [[ -z "${RELEASE_VERSION}" ]]; then
+            echo "state=invalid" >> "$GITHUB_OUTPUT"
+            echo "assets_complete=true" >> "$GITHUB_OUTPUT"
+            echo "Release tag is invalid; skipping target build."
+            exit 0
+          fi
+
+          REQUIRED_ASSETS=(
+            "xTermius_${RELEASE_VERSION}_${RELEASE_ARCH}.dmg"
+            "xTermius_${RELEASE_ARCH}.app.tar.gz"
+            "xTermius_${RELEASE_ARCH}.app.tar.gz.sig"
+          )
+
+          ERROR_LOG="$(mktemp)"
+          if RELEASE_IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>"${ERROR_LOG}")"; then
+            if [[ "${RELEASE_IS_DRAFT}" == "true" ]]; then
+              echo "state=draft" >> "$GITHUB_OUTPUT"
+              echo "release_draft=true" >> "$GITHUB_OUTPUT"
+              echo "Release state: draft"
+            else
+              echo "state=published" >> "$GITHUB_OUTPUT"
+              echo "release_draft=false" >> "$GITHUB_OUTPUT"
+              echo "Release state: published"
+            fi
+
+            ASSETS="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+            MISSING_ASSETS=()
+            for ASSET in "${REQUIRED_ASSETS[@]}"; do
+              if ! grep -Fxq "${ASSET}" <<<"${ASSETS}"; then
+                MISSING_ASSETS+=("${ASSET}")
+              fi
+            done
+
+            if [[ "${#MISSING_ASSETS[@]}" -eq 0 ]]; then
+              echo "assets_complete=true" >> "$GITHUB_OUTPUT"
+              echo "Target assets for ${RELEASE_ARCH} already exist."
+            else
+              echo "Target assets missing for ${RELEASE_ARCH}: ${MISSING_ASSETS[*]}"
+            fi
+          else
+            if grep -qiE '404|not found|release not found' "${ERROR_LOG}"; then
+              echo "state=missing" >> "$GITHUB_OUTPUT"
+              echo "release_draft=true" >> "$GITHUB_OUTPUT"
+              echo "Release state: missing"
+            else
+              cat "${ERROR_LOG}" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Checkout
+        if: steps.inspect_release.outputs.assets_complete != 'true'
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
       - name: Setup Node.js
-        if: steps.inspect_release.outputs.state != 'published'
+        if: steps.inspect_release.outputs.assets_complete != 'true'
         uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: npm
 
       - name: Sync app versions from tag
-        if: steps.inspect_release.outputs.state != 'published' && env.RELEASE_VERSION != ''
+        if: steps.inspect_release.outputs.assets_complete != 'true' && env.RELEASE_VERSION != ''
         run: |
           node -e "const fs=require('fs'); const p='package.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
           node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.version=process.env.RELEASE_VERSION; fs.writeFileSync(p, JSON.stringify(j, null, 2)+'\n');"
@@ -96,17 +143,17 @@ jobs:
           echo "Version files synchronized to ${RELEASE_VERSION}"
 
       - name: Setup Rust
-        if: steps.inspect_release.outputs.state != 'published'
+        if: steps.inspect_release.outputs.assets_complete != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install frontend deps
-        if: steps.inspect_release.outputs.state != 'published'
+        if: steps.inspect_release.outputs.assets_complete != 'true'
         run: npm ci
 
       - name: Build and publish Tauri release
-        if: steps.inspect_release.outputs.state != 'published' && env.RELEASE_TAG != ''
+        if: steps.inspect_release.outputs.assets_complete != 'true' && env.RELEASE_TAG != ''
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,7 +162,7 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "xTermius ${{ env.RELEASE_TAG }}"
-          releaseDraft: true
+          releaseDraft: ${{ steps.inspect_release.outputs.release_draft }}
           prerelease: false
           generateReleaseNotes: true
           tauriScript: npm run tauri
@@ -153,11 +200,62 @@ jobs:
             fi
           fi
 
+      - name: Derive release version from tag
+        run: |
+          echo "RELEASE_VERSION=" >> "$GITHUB_ENV"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [[ -n "${VERSION}" ]]; then
+              echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+            fi
+          fi
+
       - name: Fail if release is missing
         if: steps.inspect_release.outputs.state == 'missing'
         run: |
           echo "Release ${GITHUB_REF_NAME} is missing, cannot finalize." >&2
           exit 1
+
+      - name: Validate release assets
+        if: steps.inspect_release.outputs.state != 'missing' && env.RELEASE_VERSION != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REQUIRED_ASSETS=(
+            "latest.json"
+            "xTermius_${RELEASE_VERSION}_aarch64.dmg"
+            "xTermius_aarch64.app.tar.gz"
+            "xTermius_aarch64.app.tar.gz.sig"
+            "xTermius_${RELEASE_VERSION}_x64.dmg"
+            "xTermius_x64.app.tar.gz"
+            "xTermius_x64.app.tar.gz.sig"
+          )
+
+          ASSETS="$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          MISSING_ASSETS=()
+          for ASSET in "${REQUIRED_ASSETS[@]}"; do
+            if ! grep -Fxq "${ASSET}" <<<"${ASSETS}"; then
+              MISSING_ASSETS+=("${ASSET}")
+            fi
+          done
+
+          if [[ "${#MISSING_ASSETS[@]}" -gt 0 ]]; then
+            echo "Missing release assets: ${MISSING_ASSETS[*]}" >&2
+            exit 1
+          fi
+
+          ASSET_DIR="${RUNNER_TEMP}/release-assets"
+          mkdir -p "${ASSET_DIR}"
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --pattern latest.json --dir "${ASSET_DIR}" --clobber
+
+          for PLATFORM in darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app; do
+            if ! grep -q "\"${PLATFORM}\"" "${ASSET_DIR}/latest.json"; then
+              echo "latest.json is missing platform entry ${PLATFORM}" >&2
+              exit 1
+            fi
+          done
+
+          echo "Release assets validated."
 
       - name: Publish draft release
         if: steps.inspect_release.outputs.state == 'draft'

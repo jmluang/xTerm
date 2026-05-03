@@ -4,7 +4,7 @@ path = "src/main.rs"
 
 [package]
 name = "xtermius"
-version = "0.3.1"
+version = "0.3.2"
 description = "A terminal emulator with SSH support"
 authors = ["you"]
 edition = "2021"

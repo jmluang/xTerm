@@ -72,8 +72,45 @@ function assertUpdaterAutoCheckContract() {
   );
 }
 
-const expectedVersion = latestReleaseVersion();
+function assertReleaseWorkflowProtectsTargetAssets() {
+  const workflow = read(".github/workflows/release.yml");
+
+  assert.doesNotMatch(
+    workflow,
+    /if:\s*steps\.inspect_release\.outputs\.state\s*!=\s*'published'/,
+    "Release matrix jobs must not skip target builds just because the release is already published"
+  );
+  assert.match(
+    workflow,
+    /assets_complete/,
+    "Release workflow must compute whether the current matrix target's assets already exist"
+  );
+  assert.match(
+    workflow,
+    /release_draft/,
+    "Release workflow must pass releaseDraft according to the inspected release state"
+  );
+  assert.match(
+    workflow,
+    /Validate release assets/,
+    "Release finalizer must validate all required release assets before reporting success"
+  );
+  for (const expected of [
+    "xTermius_${RELEASE_VERSION}_aarch64.dmg",
+    "xTermius_aarch64.app.tar.gz",
+    "xTermius_aarch64.app.tar.gz.sig",
+    "xTermius_${RELEASE_VERSION}_x64.dmg",
+    "xTermius_x64.app.tar.gz",
+    "xTermius_x64.app.tar.gz.sig",
+    "latest.json",
+  ]) {
+    assert.ok(workflow.includes(expected), `Release workflow must require ${expected}`);
+  }
+}
+
+const expectedVersion = process.env.EXPECTED_RELEASE_VERSION || latestReleaseVersion();
 assertAppVersionFiles(expectedVersion);
 assertUpdaterAutoCheckContract();
+assertReleaseWorkflowProtectsTargetAssets();
 
 console.log(`Updater regressions verified for release ${expectedVersion}`);
