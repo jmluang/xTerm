@@ -99,17 +99,17 @@ check("release workflow checks out the selected release tag", () => {
   );
 });
 
-check("release workflow passes the peeled release commit to tauri-action", () => {
+check("release workflow creates the draft release before tauri-action uploads assets", () => {
   const workflow = read(".github/workflows/release.yml");
   assert.match(
     workflow,
-    /git rev-list -n 1 "\$\{RELEASE_TAG\}"/,
-    "Release workflow must resolve annotated tags to their target commit"
+    /gh release create "\$\{RELEASE_TAG\}"[\s\S]*--draft[\s\S]*--verify-tag/,
+    "Release workflow must create the draft release without passing target_commitish to the create-release API"
   );
-  assert.match(
+  assert.doesNotMatch(
     workflow,
-    /releaseCommitish:\s*\$\{\{\s*env\.RELEASE_COMMIT\s*\}\}/,
-    "tauri-action must receive the peeled release commit instead of relying on context.sha"
+    /releaseCommitish:/,
+    "tauri-action must not pass target_commitish when creating or finding the release"
   );
 });
 

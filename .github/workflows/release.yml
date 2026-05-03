@@ -137,6 +137,23 @@ jobs:
           echo "RELEASE_COMMIT=${RELEASE_COMMIT}" >> "$GITHUB_ENV"
           echo "Release commit: ${RELEASE_COMMIT}"
 
+      - name: Ensure draft release exists
+        if: steps.inspect_release.outputs.assets_complete != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists."
+            exit 0
+          fi
+
+          gh release create "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft \
+            --verify-tag \
+            --title "xTermius ${RELEASE_TAG}" \
+            --notes "Automated release for ${RELEASE_TAG}."
+
       - name: Setup Node.js
         if: steps.inspect_release.outputs.assets_complete != 'true'
         uses: actions/setup-node@v5
@@ -219,7 +236,6 @@ jobs:
           releaseDraft: ${{ steps.inspect_release.outputs.release_draft }}
           prerelease: false
           generateReleaseNotes: true
-          releaseCommitish: ${{ env.RELEASE_COMMIT }}
           tauriScript: npm run tauri
           args: --target ${{ matrix.target }}
           includeUpdaterJson: true
