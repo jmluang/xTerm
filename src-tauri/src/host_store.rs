@@ -35,10 +35,39 @@ pub(crate) fn ensure_config_dir() -> Result<(), String> {
     Ok(())
 }
 
+/// Write `contents` to `path` atomically: a concurrent reader (e.g. `ssh -F`)
+/// always sees either the old or the new complete file, never a truncated one.
+pub(crate) fn atomic_write(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("tmp");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!(".{file_name}.tmp.{nonce}"));
+    if let Err(e) = fs::write(&tmp, contents) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
 pub(crate) fn open_hosts_db() -> Result<Connection, String> {
     ensure_config_dir()?;
     let path = get_hosts_db_path();
-    Connection::open(path).map_err(|e| e.to_string())
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    // Main and settings windows share this DB from the same process; without a
+    // busy timeout a concurrent write surfaces to the user as "database is locked".
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    Ok(conn)
 }
 
 fn ensure_hosts_schema(conn: &Connection) -> Result<(), String> {
@@ -333,7 +362,7 @@ pub fn settings_load() -> Result<Settings, String> {
         settings.has_webdav_password = webdav_password_has();
         settings.webdav_password_clear = false;
         let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-        fs::write(&path, content).map_err(|e| e.to_string())?;
+        atomic_write(&path, content.as_bytes())?;
     }
     if settings.webdav_folder.is_none() {
         settings.webdav_folder = Some("xTermius".to_string());
@@ -362,7 +391,7 @@ pub fn settings_save(mut settings: Settings) -> Result<(), String> {
     settings.webdav_password_clear = false;
     let path = get_settings_path();
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| e.to_string())?;
+    atomic_write(&path, content.as_bytes())?;
     Ok(())
 }
 

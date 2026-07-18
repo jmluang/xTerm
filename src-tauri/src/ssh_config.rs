@@ -1,6 +1,5 @@
-use crate::host_store::ensure_config_dir;
+use crate::host_store::{atomic_write, ensure_config_dir};
 use crate::models::Host;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -142,7 +141,7 @@ pub fn generate_ssh_config(hosts: Vec<Host>) -> Result<(), String> {
         config.push('\n');
     }
     let path = get_ssh_config_path();
-    fs::write(&path, config).map_err(|e| e.to_string())?;
+    atomic_write(&path, config.as_bytes())?;
     SSH_CONFIG_WRITTEN.store(true, Ordering::Release);
     Ok(())
 }

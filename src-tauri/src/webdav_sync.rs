@@ -15,6 +15,16 @@ const MAX_WEBDAV_DB_BYTES: usize = 25 * 1024 * 1024;
 
 type WebdavAuth = Option<(String, String)>;
 
+// Bound every WebDAV request so a stalled/half-open server can't hang the sync
+// indefinitely (the UI keeps its busy state until the call returns).
+fn webdav_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 fn webdav_auth(settings: &Settings) -> Result<WebdavAuth, String> {
     let username = settings
         .webdav_username
@@ -164,7 +174,7 @@ pub async fn webdav_pull() -> Result<(), String> {
         .ok_or("WebDAV URL not configured")?;
     let auth = webdav_auth(&settings)?;
 
-    let client = reqwest::Client::new();
+    let client = webdav_client()?;
     let url_db =
         webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.db")?;
     let db_response = with_webdav_auth(client.get(&url_db), &auth)
@@ -269,7 +279,7 @@ pub async fn webdav_push() -> Result<(), String> {
     let content = fs::read(&hosts_path).map_err(|e| e.to_string())?;
     let hosts_json = serde_json::to_vec_pretty(&hosts_load()?).map_err(|e| e.to_string())?;
 
-    let client = reqwest::Client::new();
+    let client = webdav_client()?;
     let url_db =
         webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.db")?;
     let url_json = webdav_resolve_url_with_folder(
