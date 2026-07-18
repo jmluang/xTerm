@@ -18,12 +18,20 @@ type PtyDataQueueState = {
   chunks: string[];
   queuedChars: number;
   rafId: number | null;
+  timerId: number | null;
   writing: boolean;
   backpressureCompactions: number;
 };
 
 const PTY_DATA_BATCH_CHARS = 64_000;
 const PTY_DATA_BACKPRESSURE_CHARS = 512_000;
+// rAF stalls while the window is occluded/minimized (WKWebView pauses it), so
+// flushes are also armed with a timer. Without it, PTY output sits unparsed
+// until the window is visible again, and xterm's automatic replies to terminal
+// queries (cursor-position/device-attribute reports sent by shell prompts) go
+// out seconds late — the remote shell then echoes them as garbage like
+// `12;1R` after the cursor.
+const PTY_DATA_FLUSH_FALLBACK_MS = 50;
 
 export function usePtyEvents(params: UsePtyEventsParams) {
   const { isInTauri, setSessions, setActiveSessionId, setConnectingHosts, terminalRefs, runtimeRefs } = params;
@@ -32,6 +40,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     sessionHadAnyOutput,
     sessionConnectTimers,
     sessionMeta,
+    sessionConnectingCounted,
     sessionCloseReason,
   } = runtimeRefs;
   const ptyDataQueues = useRef(new Map<string, PtyDataQueueState>());
@@ -43,6 +52,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         chunks: [],
         queuedChars: 0,
         rafId: null,
+        timerId: null,
         writing: false,
         backpressureCompactions: 0,
       };
@@ -78,14 +88,46 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     return batch;
   }
 
-  function clearPtyDataQueue(sessionId: string) {
-    const queue = ptyDataQueues.current.get(sessionId);
-    if (!queue) return;
+  function cancelScheduledFlush(queue: PtyDataQueueState) {
     if (queue.rafId !== null) {
       window.cancelAnimationFrame(queue.rafId);
       queue.rafId = null;
     }
+    if (queue.timerId !== null) {
+      window.clearTimeout(queue.timerId);
+      queue.timerId = null;
+    }
+  }
+
+  function clearPtyDataQueue(sessionId: string) {
+    const queue = ptyDataQueues.current.get(sessionId);
+    if (!queue) return;
+    cancelScheduledFlush(queue);
     ptyDataQueues.current.delete(sessionId);
+  }
+
+  function flushPtyDataQueueImmediately(sessionId: string) {
+    const queue = ptyDataQueues.current.get(sessionId);
+    if (!queue) return;
+    cancelScheduledFlush(queue);
+    const pending = queue.chunks.join("");
+    queue.chunks = [];
+    queue.queuedChars = 0;
+    ptyDataQueues.current.delete(sessionId);
+    if (!pending) return;
+
+    const handle = terminalRefs.sessionTerminals.current.get(sessionId);
+    if (!handle) {
+      appendSessionBuffer(sessionBuffers.current, sessionId, pending, MAX_SESSION_BUFFER_CHARS);
+      return;
+    }
+
+    try {
+      handle.terminal.write(pending);
+    } catch (error) {
+      console.debug("[xterm] immediate queued write skipped (pty:exit)", error);
+      appendSessionBuffer(sessionBuffers.current, sessionId, pending, MAX_SESSION_BUFFER_CHARS);
+    }
   }
 
   function flushPtyDataQueue(sessionId: string) {
@@ -125,11 +167,16 @@ export function usePtyEvents(params: UsePtyEventsParams) {
 
   function schedulePtyDataFlush(sessionId: string) {
     const queue = ptyDataQueues.current.get(sessionId);
-    if (!queue || queue.rafId !== null || queue.writing) return;
-    queue.rafId = window.requestAnimationFrame(() => {
-      queue.rafId = null;
+    if (!queue || queue.writing) return;
+    if (queue.rafId !== null || queue.timerId !== null) return;
+    const run = () => {
+      cancelScheduledFlush(queue);
       flushPtyDataQueue(sessionId);
-    });
+    };
+    // Race rAF (frame-aligned when visible) against a timer (keeps flowing
+    // when rAF is paused); whichever fires first cancels the other.
+    queue.rafId = window.requestAnimationFrame(run);
+    queue.timerId = window.setTimeout(run, PTY_DATA_FLUSH_FALLBACK_MS);
   }
 
   function enqueuePtyDataWrite(sessionId: string, data: string) {
@@ -144,6 +191,22 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     queue.queuedChars += data.length;
     compactPtyDataQueueForBackpressure(queue);
     schedulePtyDataFlush(sessionId);
+  }
+
+  function releaseSessionConnectingCount(sessionId: string, hostId: string) {
+    if (!sessionConnectingCounted.current.has(sessionId)) return;
+    sessionConnectingCounted.current.delete(sessionId);
+    setConnectingHosts((prev) => {
+      const current = prev[hostId];
+      if (!current) return prev;
+      const nextCount = Math.max(0, (current.count ?? 1) - 1);
+      if (nextCount === 0) {
+        const next = { ...prev };
+        delete next[hostId];
+        return next;
+      }
+      return { ...prev, [hostId]: { ...current, count: nextCount } };
+    });
   }
 
   useEffect(() => {
@@ -166,17 +229,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         }
         const meta = sessionMeta.current.get(sessionId);
         if (meta) {
-          setConnectingHosts((prev) => {
-            const current = prev[meta.hostId];
-            if (!current) return prev;
-            const nextCount = Math.max(0, (current.count ?? 1) - 1);
-            if (nextCount === 0) {
-              const next = { ...prev };
-              delete next[meta.hostId];
-              return next;
-            }
-            return { ...prev, [meta.hostId]: { ...current, count: nextCount } };
-          });
+          releaseSessionConnectingCount(sessionId, meta.hostId);
         }
       }
 
@@ -201,7 +254,11 @@ export function usePtyEvents(params: UsePtyEventsParams) {
       }
 
       const meta = sessionMeta.current.get(sessionId);
+      if (meta) {
+        releaseSessionConnectingCount(sessionId, meta.hostId);
+      }
       sessionMeta.current.delete(sessionId);
+      sessionConnectingCounted.current.delete(sessionId);
       sessionCloseReason.current.delete(sessionId);
       sessionHadAnyOutput.current.delete(sessionId);
       const timer = sessionConnectTimers.current.get(sessionId);
@@ -210,20 +267,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         sessionConnectTimers.current.delete(sessionId);
       }
 
-      if (meta) {
-        setConnectingHosts((prev) => {
-          const current = prev[meta.hostId];
-          if (!current) return prev;
-          const nextCount = Math.max(0, (current.count ?? 1) - 1);
-          if (nextCount === 0) {
-            const next = { ...prev };
-            delete next[meta.hostId];
-            return next;
-          }
-          return { ...prev, [meta.hostId]: { ...current, count: nextCount } };
-        });
-      }
-
+      if (shouldKeepFailedTab) flushPtyDataQueueImmediately(sessionId);
       if (!shouldKeepFailedTab) sessionBuffers.current.delete(sessionId);
       clearPtyDataQueue(sessionId);
     });

@@ -24,7 +24,8 @@
         "acceptFirstMouse": true,
         "resizable": true,
         "fullscreen": false,
-        "devtools": false
+        "devtools": false,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
