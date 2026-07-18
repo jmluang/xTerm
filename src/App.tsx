@@ -19,10 +19,7 @@ function clampSidebarWidth(width: number) {
   return Math.max(SIDEBAR_WIDTH_MIN, Math.min(max, Math.round(width)));
 }
 
-function App() {
-  const panel = new URLSearchParams(window.location.search).get("panel");
-  if (panel === "settings") return <SettingsWindowApp />;
-
+function MainWindowApp() {
   const ctrl = useAppController();
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY) || SIDEBAR_WIDTH_DEFAULT);
@@ -245,6 +242,12 @@ function App() {
       <ToastViewport />
     </div>
   );
+}
+
+function App() {
+  const panel = new URLSearchParams(window.location.search).get("panel");
+  if (panel === "settings") return <SettingsWindowApp />;
+  return <MainWindowApp />;
 }
 
 export default App;

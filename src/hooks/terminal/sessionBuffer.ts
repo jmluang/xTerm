@@ -40,10 +40,12 @@ export function appendSessionBuffer(
   maxChunks = MAX_SESSION_BUFFER_CHUNKS
 ) {
   if (!data) return;
+  if (maxChars <= 0) return;
+  const boundedData = data.length > maxChars ? data.slice(-maxChars) : data;
   const buffer = ensureBuffer(store, sessionId);
 
-  buffer.chunks.push(data);
-  buffer.totalChars += data.length;
+  buffer.chunks.push(boundedData);
+  buffer.totalChars += boundedData.length;
   buffer.cachedText = null;
 
   while (buffer.totalChars > maxChars && buffer.start < buffer.chunks.length) {

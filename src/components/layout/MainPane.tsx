@@ -655,8 +655,8 @@ export function MainPane(props: {
                       <div className="col-span-4 rounded-md bg-muted/40 p-2.5">
                         <div className="text-[10px] text-muted-foreground">Top Processes</div>
                         <div className="mt-1.5 space-y-1">
-                          {liveInfo.processes?.slice(0, 5).map((proc) => (
-                            <div key={`${proc.command}-${proc.cpuPercent}`} className="flex items-center gap-2 text-[10px]">
+                          {liveInfo.processes?.slice(0, 5).map((proc, processIndex) => (
+                            <div key={proc.pid ? `${proc.pid}-${proc.command}` : `${processIndex}-${proc.command}`} className="flex items-center gap-2 text-[10px]">
                               <div className="flex-1 truncate font-mono">{proc.command}</div>
                               <div className="w-12 text-right tabular-nums font-semibold">{formatPercent(proc.cpuPercent)}</div>
                             </div>

@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Host } from "@/types/models";
 
+function clampHostPort(port: number) {
+  if (!Number.isFinite(port)) return 22;
+  return Math.max(1, Math.min(65535, Math.trunc(port)));
+}
+
 export function HostEditorDialog(props: {
   open: boolean;
   onClose: () => void;
@@ -95,9 +100,12 @@ export function HostEditorDialog(props: {
                         <label className="text-sm font-medium">Port</label>
                         <Input
                           type="number"
+                          min={1}
+                          max={65535}
+                          step={1}
                           value={formData.port || 22}
                           onChange={(e) =>
-                            setFormData({ ...formData, port: parseInt(e.target.value || "22", 10) })
+                            setFormData({ ...formData, port: clampHostPort(parseInt(e.target.value || "22", 10)) })
                           }
                         />
                       </div>

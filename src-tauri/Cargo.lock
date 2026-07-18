@@ -5677,6 +5677,7 @@ version = "0.3.3"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
+ "encoding_rs",
  "keyring",
  "portable-pty",
  "reqwest 0.12.28",

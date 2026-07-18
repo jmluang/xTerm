@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use url::Url;
 
 const MAX_WEBDAV_DB_BYTES: usize = 25 * 1024 * 1024;
+// hosts.db is the canonical WebDAV format. hosts.json is only a legacy fallback/export.
 
 type WebdavAuth = Option<(String, String)>;
 
@@ -164,45 +165,15 @@ pub async fn webdav_pull() -> Result<(), String> {
     let auth = webdav_auth(&settings)?;
 
     let client = reqwest::Client::new();
-    let url_json = webdav_resolve_url_with_folder(
-        &webdav_url,
-        settings.webdav_folder.as_deref(),
-        "hosts.json",
-    )?;
-    let request = with_webdav_auth(client.get(&url_json), &auth);
-
-    let response = request.send().await.map_err(|e| e.to_string())?;
-    let status = response.status();
-    if status.is_success() {
-        let content = response.text().await.map_err(|e| e.to_string())?;
-        let hosts: Vec<Host> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-        let mut conn = open_hosts_db()?;
-        import_hosts_json_to_db(&mut conn, hosts)?;
-        let _ = generate_ssh_config(hosts_load()?);
-        return Ok(());
-    }
-
-    if status.as_u16() == 404 {
-        let url_db = webdav_resolve_url_with_folder(
-            &webdav_url,
-            settings.webdav_folder.as_deref(),
-            "hosts.db",
-        )?;
-        let r2 = with_webdav_auth(client.get(&url_db), &auth);
-        let resp2 = r2.send().await.map_err(|e| e.to_string())?;
-        if !resp2.status().is_success() {
-            let s2 = resp2.status();
-            let body = resp2.text().await.unwrap_or_default();
-            let body = body.trim();
-            if body.is_empty() {
-                return Err(format!("Pull failed: {s2}"));
-            }
-            return Err(format!(
-                "Pull failed: {s2} ({})",
-                &body.chars().take(180).collect::<String>()
-            ));
-        }
-        let bytes = resp2.bytes().await.map_err(|e| e.to_string())?;
+    let url_db =
+        webdav_resolve_url_with_folder(&webdav_url, settings.webdav_folder.as_deref(), "hosts.db")?;
+    let db_response = with_webdav_auth(client.get(&url_db), &auth)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let db_status = db_response.status();
+    if db_status.is_success() {
+        let bytes = db_response.bytes().await.map_err(|e| e.to_string())?;
         if bytes.len() > MAX_WEBDAV_DB_BYTES {
             return Err(format!(
                 "Downloaded hosts.db is too large: {} bytes",
@@ -237,6 +208,36 @@ pub async fn webdav_pull() -> Result<(), String> {
         let _ = generate_ssh_config(hosts_load()?);
         return Ok(());
     }
+    if db_status.as_u16() != 404 {
+        let body = db_response.text().await.unwrap_or_default();
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(format!("Pull failed: {db_status}"));
+        }
+        return Err(format!(
+            "Pull failed: {db_status} ({})",
+            &body.chars().take(180).collect::<String>()
+        ));
+    }
+
+    let url_json = webdav_resolve_url_with_folder(
+        &webdav_url,
+        settings.webdav_folder.as_deref(),
+        "hosts.json",
+    )?;
+    let request = with_webdav_auth(client.get(&url_json), &auth);
+
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    let status = response.status();
+    if status.is_success() {
+        let content = response.text().await.map_err(|e| e.to_string())?;
+        let hosts: Vec<Host> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let mut conn = open_hosts_db()?;
+        import_hosts_json_to_db(&mut conn, hosts)?;
+        let _ = generate_ssh_config(hosts_load()?);
+        return Ok(());
+    }
+
     let body = response.text().await.unwrap_or_default();
     let body = body.trim();
     if body.is_empty() {

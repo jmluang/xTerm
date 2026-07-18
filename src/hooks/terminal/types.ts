@@ -45,6 +45,7 @@ export type SessionRuntimeRefs = {
   sessionHadAnyOutput: MutableRefObject<Set<string>>;
   sessionConnectTimers: MutableRefObject<Map<string, number>>;
   sessionMeta: MutableRefObject<Map<string, SessionMeta>>;
+  sessionConnectingCounted: MutableRefObject<Set<string>>;
   sessionCloseReason: MutableRefObject<Map<string, SessionCloseReason>>;
 };
 

@@ -38,6 +38,7 @@ export function useTerminalSessions(params: {
   const sessionHadAnyOutput = useRef(new Set<string>());
   const sessionConnectTimers = useRef(new Map<string, number>());
   const sessionMeta = useRef(new Map<string, { hostId: string; hostLabel: string; startedAt: number }>());
+  const sessionConnectingCounted = useRef(new Set<string>());
   const sessionCloseReason = useRef(new Map<string, "user" | "timeout" | "unknown">());
 
   const terminalRefs = useMemo<TerminalRefs>(
@@ -59,6 +60,7 @@ export function useTerminalSessions(params: {
       sessionHadAnyOutput,
       sessionConnectTimers,
       sessionMeta,
+      sessionConnectingCounted,
       sessionCloseReason,
     }),
     []

@@ -82,9 +82,12 @@ pub(crate) fn webdav_resolve_url_with_folder(
         .pop_if_empty();
 
     if !folder.is_empty() {
-        url.path_segments_mut()
-            .map_err(|_| "Invalid WebDAV URL (cannot modify path)".to_string())?
-            .push(folder);
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "Invalid WebDAV URL (cannot modify path)".to_string())?;
+        for segment in folder.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
     }
 
     url.path_segments_mut()
@@ -114,6 +117,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got, "https://dav.example.com/dav/xTermius/hosts.db");
+    }
+
+    #[test]
+    fn resolve_with_folder_preserves_nested_folder_segments() {
+        let got = webdav_resolve_url_with_folder(
+            "https://dav.example.com/dav/",
+            Some("backup/xtermius"),
+            "hosts.db",
+        )
+        .unwrap();
+        assert_eq!(got, "https://dav.example.com/dav/backup/xtermius/hosts.db");
     }
 
     #[test]

@@ -137,6 +137,65 @@ function assertPtyDataQueueBackpressure() {
     /queuedChars/,
     "PTY data queue must track queued characters for backpressure"
   );
+  assertMatch(
+    ptyEvents,
+    /flushPtyDataQueueImmediately/,
+    "PTY exit handling must flush queued data immediately for retained failed tabs"
+  );
+  assertOrdered(
+    ptyEvents,
+    "if (shouldKeepFailedTab) flushPtyDataQueueImmediately(sessionId);",
+    "if (!shouldKeepFailedTab) sessionBuffers.current.delete(sessionId);",
+    "Failed retained tabs must flush queued output before buffer cleanup"
+  );
+}
+
+function assertTerminalSpawnTimeoutCleanup() {
+  const actions = read("src/hooks/terminal/actions.ts");
+  assertMatch(
+    actions,
+    /spawnSshWithTimeout/,
+    "SSH spawning must use a timeout helper that can clean up late backend sessions"
+  );
+  assertMatch(
+    actions,
+    /void invoke\("pty_kill", \{ sessionId \}\)/,
+    "Late pty_spawn_ssh completions after frontend timeout must be killed"
+  );
+  assertMatch(
+    actions,
+    /decrementConnectingHost\(setConnectingHosts,\s*host\.id\)/,
+    "Connection failures must decrement the per-host connecting count"
+  );
+  assertMatch(
+    actions,
+    /sessionConnectingCounted\.current\.has\(sessionId\)/,
+    "closeSession must only decrement sessions that still own a connecting count"
+  );
+  const ptyEvents = read("src/hooks/terminal/ptyEvents.ts");
+  assertMatch(
+    ptyEvents,
+    /releaseSessionConnectingCount\(sessionId,\s*meta\.hostId\)/,
+    "PTY data and exit handlers must release connecting counts through the per-session counted guard"
+  );
+  assert.doesNotMatch(
+    actions,
+    /delete next\[meta\.hostId\]/,
+    "closeSession must decrement connecting counts instead of deleting the whole host entry"
+  );
+}
+
+function assertLowRiskReviewRegressions() {
+  const app = read("src/App.tsx");
+  const hostEditor = read("src/components/dialogs/HostEditorDialog.tsx");
+  const sessionBuffer = read("src/hooks/terminal/sessionBuffer.ts");
+  const mainPane = read("src/components/layout/MainPane.tsx");
+
+  assert.match(app, /function\s+MainWindowApp\(\)[\s\S]*useAppController\(\)/, "Main window hooks must live in MainWindowApp");
+  assert.match(app, /function\s+App\(\)[\s\S]*panel === "settings"[\s\S]*<MainWindowApp \/>/, "App must only route between settings and main window components");
+  assert.match(hostEditor, /clampHostPort/, "Host editor must clamp ports before saving them");
+  assert.match(sessionBuffer, /slice\(-maxChars\)/, "Oversized session buffer chunks must keep their tail instead of clearing the buffer");
+  assert.match(mainPane, /proc\.pid|processIndex/, "Top process rows must use a stable non-duplicating key");
 }
 
 function assertToastA11y() {
@@ -164,6 +223,8 @@ assertBellStyleReachesXterm();
 assertMetricsDockGatesLivePolling();
 assertAllSessionResizePath();
 assertPtyDataQueueBackpressure();
+assertTerminalSpawnTimeoutCleanup();
+assertLowRiskReviewRegressions();
 assertToastA11y();
 assertSessionTabsA11y();
 

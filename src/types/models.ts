@@ -30,6 +30,7 @@ export interface HostStaticInfo {
 }
 
 export interface HostLiveProcess {
+  pid?: number;
   command: string;
   cpuPercent: number;
   memPercent: number;

@@ -30,6 +30,7 @@ tauri-plugin-dialog = "2.6.0"
 portable-pty = "0.9.0"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 url = "2"
+encoding_rs = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

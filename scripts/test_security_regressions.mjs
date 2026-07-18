@@ -46,9 +46,12 @@ function assertTypedPtySpawn() {
   );
   assert.match(
     pty,
-    /should_send_auto_password/,
-    "saved SSH passwords must be handled through bounded PTY prompt response, not askpass"
+    /AutoPasswordState[\s\S]*AUTO_PASSWORD_ARM_SECONDS[\s\S]*AutoPasswordPromptMatcher/,
+    "saved SSH passwords must be handled through bounded target-matched PTY prompt response, not askpass"
   );
+  assert.match(pty, /fn disarm\(&mut self\)/, "saved SSH password prompt handling must be explicitly disarmable");
+  assert.match(pty, /parse_env_vars[\s\S]*SetEnv=/, "host envVars must be parsed and sent into SSH sessions");
+  assert.match(pty, /PtyOutputDecoder[\s\S]*Encoding::for_label/, "host encoding must drive PTY output decoding");
 }
 
 function assertWebviewBoundary() {
@@ -94,6 +97,17 @@ function assertHostProbeAuthBoundary() {
   assert.match(hostProbe, /create_new\(true\)/, "host probe askpass scripts must be created atomically");
   assert.match(hostProbe, /mode\(0o700\)/, "host probe askpass scripts must be executable only by the owner");
   assert.doesNotMatch(hostProbe, /fs::write\(&path,\s*script\)/, "host probe askpass scripts must not use non-atomic fs::write");
+  assert.match(hostProbe, /probe_ssh_args/, "host probes must build SSH args through a testable helper");
+  assert.match(hostProbe, /"-F"[\s\S]*get_ssh_config_path/, "host probes must reuse the generated ssh_config");
+  assert.match(hostProbe, /ControlMaster=auto[\s\S]*ControlPersist=30s/, "host live probes must reuse SSH connections with ControlMaster");
+}
+
+function assertWebdavCanonicalDbSync() {
+  const webdavSync = read("src-tauri/src/webdav_sync.rs");
+  const dbIndex = webdavSync.indexOf('"hosts.db"');
+  const jsonIndex = webdavSync.indexOf('"hosts.json"');
+  assert.ok(dbIndex >= 0 && jsonIndex >= 0 && dbIndex < jsonIndex, "WebDAV pull must try hosts.db before legacy hosts.json");
+  assert.match(webdavSync, /canonical.*hosts\.db|hosts\.db.*canonical/i, "WebDAV sync must document hosts.db as the canonical remote format");
 }
 
 assertNoRendererSecretReads();
@@ -102,5 +116,6 @@ assertWebviewBoundary();
 assertWebdavPasswordNotSerialized();
 assertSshConfigValidation();
 assertHostProbeAuthBoundary();
+assertWebdavCanonicalDbSync();
 
 console.log("Security regressions verified");

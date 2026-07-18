@@ -35,6 +35,47 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
+function decrementConnectingHost(setConnectingHosts: SetConnectingHosts, hostId: string) {
+  setConnectingHosts((prev) => {
+    const current = prev[hostId];
+    if (!current) return prev;
+    const nextCount = Math.max(0, (current.count ?? 1) - 1);
+    if (nextCount === 0) {
+      const next = { ...prev };
+      delete next[hostId];
+      return next;
+    }
+    return { ...prev, [hostId]: { ...current, count: nextCount } };
+  });
+}
+
+async function spawnSshWithTimeout(hostId: string, cols: number, rows: number, ms: number): Promise<string> {
+  let timer: number | null = null;
+  let timedOut = false;
+  const spawnPromise = invoke<string>("pty_spawn_ssh", { hostId, cols, rows });
+
+  spawnPromise.then(
+    (sessionId) => {
+      if (timedOut) void invoke("pty_kill", { sessionId });
+    },
+    () => {}
+  );
+
+  try {
+    return await Promise.race([
+      spawnPromise,
+      new Promise<string>((_, reject) => {
+        timer = window.setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`Timeout: pty spawn (${ms}ms)`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
+}
+
 export function useSessionActions(params: UseSessionActionsParams) {
   const { isInTauri, hosts, activeSessionId, setSessions, setActiveSessionId, setConnectingHosts, terminalRefs, runtimeRefs } =
     params;
@@ -43,6 +84,7 @@ export function useSessionActions(params: UseSessionActionsParams) {
     sessionHadAnyOutput,
     sessionConnectTimers,
     sessionMeta,
+    sessionConnectingCounted,
     sessionCloseReason,
   } = runtimeRefs;
 
@@ -61,15 +103,12 @@ export function useSessionActions(params: UseSessionActionsParams) {
       if (activeSessionId === sessionId) setActiveSessionId(null);
     }
     const meta = sessionMeta.current.get(sessionId);
-    if (meta) {
-      setConnectingHosts((prev) => {
-        if (!prev[meta.hostId]) return prev;
-        const next = { ...prev };
-        delete next[meta.hostId];
-        return next;
-      });
+    if (meta && sessionConnectingCounted.current.has(sessionId)) {
+      sessionConnectingCounted.current.delete(sessionId);
+      decrementConnectingHost(setConnectingHosts, meta.hostId);
     }
     sessionMeta.current.delete(sessionId);
+    sessionConnectingCounted.current.delete(sessionId);
     sessionHadAnyOutput.current.delete(sessionId);
     const timer = sessionConnectTimers.current.get(sessionId);
     if (timer) {
@@ -113,21 +152,14 @@ export function useSessionActions(params: UseSessionActionsParams) {
         return { ...prev, [host.id]: { ...current, stage: "spawn" } };
       });
 
-      const sessionId = await withTimeout(
-        invoke<string>("pty_spawn_ssh", {
-          hostId: host.id,
-          cols,
-          rows,
-        }),
-        10000,
-        "pty spawn"
-      );
+      const sessionId = await spawnSshWithTimeout(host.id, cols, rows, 10000);
 
       sessionMeta.current.set(sessionId.toString(), {
         hostId: host.id,
         hostLabel: host.alias || host.hostname,
         startedAt,
       });
+      sessionConnectingCounted.current.add(sessionId.toString());
       sessionHadAnyOutput.current.delete(sessionId.toString());
       setConnectingHosts((prev) => {
         const current = prev[host.id];
@@ -159,6 +191,7 @@ export function useSessionActions(params: UseSessionActionsParams) {
         }
       });
     } catch (error) {
+      decrementConnectingHost(setConnectingHosts, host.id);
       console.error("Failed to connect:", error);
       alert(`Failed to connect: ${error}`);
     }

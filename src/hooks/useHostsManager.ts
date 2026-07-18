@@ -3,6 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm, message, open } from "@tauri-apps/plugin-dialog";
 import type { Host, SshConfigImportCandidate } from "@/types/models";
 
+function clampHostPort(port: number | undefined) {
+  if (!Number.isFinite(port)) return 22;
+  return Math.max(1, Math.min(65535, Math.trunc(port ?? 22)));
+}
+
 export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boolean }) {
   const { isInTauri, sidebarOpen } = params;
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -242,7 +247,7 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
     let pwValue = "";
 
     if (editingHost) {
-      const patch: any = { ...formData, updatedAt: now };
+      const patch: any = { ...formData, port: clampHostPort(formData.port), updatedAt: now };
       delete patch.password;
       newHosts = hosts.map((h) => (h.id === editingHost.id ? ({ ...h, ...patch } as Host) : h));
       targetId = editingHost.id;
@@ -264,7 +269,7 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
         alias: formData.alias || formData.hostname?.toLowerCase().replace(/\s+/g, "-") || "new-host",
         hostname: formData.hostname || "",
         user: formData.user || "",
-        port: formData.port || 22,
+        port: clampHostPort(formData.port),
         password: formData.password,
         hasPassword: !!(formData.password && String(formData.password).trim()),
         hostInsightsEnabled: formData.hostInsightsEnabled !== false,
