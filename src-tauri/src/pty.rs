@@ -6,70 +6,112 @@ use std::{
     io::{Read, Write},
     sync::{
         atomic::{AtomicU32, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Runtime};
 
 type SessionId = u32;
 const AUTO_PASSWORD_TAIL_CHARS: usize = 512;
+const AUTO_PASSWORD_ARM_SECONDS: u64 = 15;
+// Terminal UI lives in the main window; targeted emits avoid serializing
+// PTY traffic for every open window (e.g. the settings window).
+const MAIN_WINDOW_LABEL: &str = "main";
+const PTY_READ_BUFFER_BYTES: usize = 64 * 1024;
+// Cap for how much decoded output a single pty:data event may carry when the
+// emitter coalesces backlogged chunks.
+const PTY_EMIT_MAX_BATCH_CHARS: usize = 1024 * 1024;
 
-fn extract_ready_utf8_chunks(pending: &mut Vec<u8>) -> Vec<String> {
-    let mut chunks = Vec::new();
-
-    loop {
-        if pending.is_empty() {
-            break;
-        }
-
-        match std::str::from_utf8(pending.as_slice()) {
-            Ok(text) => {
-                if !text.is_empty() {
-                    chunks.push(text.to_string());
-                }
-                pending.clear();
-                break;
-            }
-            Err(error) => {
-                let valid_up_to = error.valid_up_to();
-                if let Some(error_len) = error.error_len() {
-                    if valid_up_to > 0 {
-                        chunks.push(String::from_utf8_lossy(&pending[..valid_up_to]).to_string());
-                    }
-
-                    let invalid_end = valid_up_to + error_len;
-                    chunks.push(
-                        String::from_utf8_lossy(&pending[valid_up_to..invalid_end]).to_string(),
-                    );
-                    pending.drain(..invalid_end);
-                    continue;
-                }
-
-                if valid_up_to > 0 {
-                    chunks.push(String::from_utf8_lossy(&pending[..valid_up_to]).to_string());
-                    pending.drain(..valid_up_to);
-                }
-                break;
-            }
-        }
-    }
-
-    chunks
+struct PtyOutputDecoder {
+    decoder: encoding_rs::Decoder,
 }
 
-fn drain_utf8_tail(pending: &mut Vec<u8>) -> Option<String> {
-    if pending.is_empty() {
-        return None;
+impl PtyOutputDecoder {
+    fn new(label: Option<&str>) -> Self {
+        let encoding = label
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| encoding_rs::Encoding::for_label(value.as_bytes()))
+            .unwrap_or(encoding_rs::UTF_8);
+        Self {
+            decoder: encoding.new_decoder(),
+        }
     }
 
-    let text = String::from_utf8_lossy(pending.as_slice()).to_string();
-    pending.clear();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
+    fn decode(&mut self, bytes: &[u8], last: bool) -> Option<String> {
+        let mut output = String::with_capacity(bytes.len().max(8));
+        let mut total_read = 0;
+        loop {
+            let (result, read, _) =
+                self.decoder
+                    .decode_to_string(&bytes[total_read..], &mut output, last);
+            total_read += read;
+            match result {
+                encoding_rs::CoderResult::InputEmpty => break,
+                encoding_rs::CoderResult::OutputFull => output.reserve(bytes.len().max(8)),
+            }
+        }
+        if output.is_empty() {
+            None
+        } else {
+            Some(output)
+        }
     }
+}
+
+fn extract_ready_output_chunks(
+    decoder: &mut PtyOutputDecoder,
+    pending: &mut Vec<u8>,
+) -> Vec<String> {
+    if pending.is_empty() {
+        return Vec::new();
+    }
+
+    let data = std::mem::take(pending);
+    match decoder.decode(&data, false) {
+        Some(output) => vec![output],
+        None => Vec::new(),
+    }
+}
+
+fn drain_output_tail(decoder: &mut PtyOutputDecoder, pending: &mut Vec<u8>) -> Option<String> {
+    let data = std::mem::take(pending);
+    decoder.decode(&data, true)
+}
+
+fn parse_env_vars(input: Option<&str>) -> Result<BTreeMap<String, String>, String> {
+    let mut env = BTreeMap::new();
+    let Some(input) = input else {
+        return Ok(env);
+    };
+    for (index, raw) in input.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!(
+                "Invalid env var on line {}: expected KEY=VALUE",
+                index + 1
+            ));
+        };
+        let key = key.trim();
+        if key.is_empty()
+            || !key
+                .chars()
+                .next()
+                .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+            || key
+                .chars()
+                .any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric()))
+        {
+            return Err(format!("Invalid env var name on line {}: {key}", index + 1));
+        }
+        env.insert(key.to_string(), value.to_string());
+    }
+    Ok(env)
 }
 
 pub struct PtyState {
@@ -90,6 +132,7 @@ struct Session {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+    auto_password: Mutex<Option<AutoPasswordState>>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -111,48 +154,144 @@ fn trim_auto_password_tail(tail: &mut String) {
     }
 }
 
-fn should_send_auto_password(tail: &str) -> bool {
-    let normalized = tail.replace('\r', "\n");
-    let prompt = normalized
-        .rsplit('\n')
-        .next()
-        .unwrap_or("")
-        .trim_end()
-        .to_ascii_lowercase();
-    if prompt.is_empty() || !prompt.ends_with("password:") {
-        return false;
-    }
-
-    ![
-        "new password",
-        "retype",
-        "confirm",
-        "verification",
-        "two-step",
-        "otp",
-        "passphrase",
-    ]
-    .iter()
-    .any(|needle| prompt.contains(needle))
+#[derive(Clone, Debug)]
+struct AutoPasswordPromptMatcher {
+    owners: Vec<String>,
 }
 
-fn maybe_send_auto_password(
-    session: &Arc<Session>,
-    auto_password: &mut Option<String>,
-    prompt_tail: &mut String,
-    data: &str,
-) {
-    if auto_password.is_none() {
-        return;
+impl AutoPasswordPromptMatcher {
+    fn new<I>(owners: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut normalized = Vec::new();
+        for owner in owners {
+            let owner = owner.trim().to_ascii_lowercase();
+            if owner.is_empty() || normalized.contains(&owner) {
+                continue;
+            }
+            normalized.push(owner);
+        }
+        Self { owners: normalized }
     }
 
-    prompt_tail.push_str(data);
-    trim_auto_password_tail(prompt_tail);
-    if !should_send_auto_password(prompt_tail) {
-        return;
+    fn for_host(host: &crate::models::Host) -> Self {
+        let user = host.user.trim();
+        let hostname = host.hostname.trim();
+        let alias = host.alias.trim();
+        let mut owners = Vec::new();
+        for target in [hostname, alias] {
+            if target.is_empty() {
+                continue;
+            }
+            owners.push(target.to_string());
+            if !user.is_empty() {
+                owners.push(format!("{user}@{target}"));
+            }
+        }
+        Self::new(owners)
     }
 
-    if let Some(password) = auto_password.take() {
+    fn matches(&self, tail: &str) -> bool {
+        if self.owners.is_empty() {
+            return false;
+        }
+
+        let normalized = tail.replace('\r', "\n");
+        let prompt = normalized
+            .rsplit('\n')
+            .next()
+            .unwrap_or("")
+            .trim_end()
+            .to_ascii_lowercase();
+        if prompt.is_empty() {
+            return false;
+        }
+
+        if [
+            "new password",
+            "retype",
+            "confirm",
+            "verification",
+            "two-step",
+            "otp",
+            "passphrase",
+        ]
+        .iter()
+        .any(|needle| prompt.contains(needle))
+        {
+            return false;
+        }
+
+        let Some(owner) = prompt.strip_suffix("'s password:") else {
+            return false;
+        };
+        self.owners.iter().any(|allowed| allowed == owner.trim())
+    }
+}
+
+#[derive(Debug)]
+struct AutoPasswordState {
+    password: Option<String>,
+    matcher: AutoPasswordPromptMatcher,
+    armed_until: Instant,
+    prompt_tail: String,
+}
+
+impl AutoPasswordState {
+    fn new(password: String, matcher: AutoPasswordPromptMatcher, armed_until: Instant) -> Self {
+        Self {
+            password: Some(password),
+            matcher,
+            armed_until,
+            prompt_tail: String::new(),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.password = None;
+        self.prompt_tail.clear();
+    }
+
+    fn is_armed(&self) -> bool {
+        self.password.is_some()
+    }
+
+    fn take_password_for_output(&mut self, data: &str, now: Instant) -> Option<String> {
+        self.password.as_ref()?;
+        if now > self.armed_until {
+            self.disarm();
+            return None;
+        }
+
+        self.prompt_tail.push_str(data);
+        trim_auto_password_tail(&mut self.prompt_tail);
+        if !self.matcher.matches(&self.prompt_tail) {
+            return None;
+        }
+
+        let password = self.password.take();
+        self.prompt_tail.clear();
+        password
+    }
+}
+
+fn maybe_send_auto_password(session: &Arc<Session>, data: &str) {
+    let password = {
+        let Ok(mut state) = session.auto_password.lock() else {
+            eprintln!("[pty] auto password state poisoned");
+            return;
+        };
+        let password = state
+            .as_mut()
+            .and_then(|state| state.take_password_for_output(data, Instant::now()));
+        if state.as_ref().is_some_and(|state| !state.is_armed()) {
+            *state = None;
+        }
+        password
+    };
+
+    if let Some(password) = password {
         match session.writer.lock() {
             Ok(mut writer) => {
                 if let Err(error) = writer.write_all(format!("{password}\n").as_bytes()) {
@@ -175,7 +314,8 @@ async fn spawn_pty_command<R: Runtime>(
     rows: u16,
     cwd: Option<String>,
     env: BTreeMap<String, String>,
-    auto_password: Option<String>,
+    encoding: Option<String>,
+    auto_password: Option<AutoPasswordState>,
     app: AppHandle<R>,
     state: tauri::State<'_, PtyState>,
 ) -> Result<String, String> {
@@ -220,6 +360,7 @@ async fn spawn_pty_command<R: Runtime>(
         master: Mutex::new(master),
         writer: Mutex::new(writer),
         killer: Mutex::new(killer),
+        auto_password: Mutex::new(auto_password),
     });
 
     {
@@ -227,47 +368,55 @@ async fn spawn_pty_command<R: Runtime>(
         sessions.insert(id, session.clone());
     }
 
-    // Reader thread: blocks on PTY read and emits data events.
-    let app_data = app.clone();
+    // Reader thread: blocks on PTY read, decodes, and hands chunks to the
+    // emitter thread. Kept separate so slow event emission never stalls reads.
     let id_data = id_s.clone();
     let session_for_reader = session.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
+    let mut output_decoder = PtyOutputDecoder::new(encoding.as_deref());
+    let (chunk_tx, chunk_rx) = mpsc::channel::<String>();
+    let reader_handle = thread::spawn(move || {
+        let mut buf = [0u8; PTY_READ_BUFFER_BYTES];
         let mut pending = Vec::new();
-        let mut auto_password = auto_password;
-        let mut prompt_tail = String::new();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     pending.extend_from_slice(&buf[..n]);
-                    for data in extract_ready_utf8_chunks(&mut pending) {
-                        maybe_send_auto_password(
-                            &session_for_reader,
-                            &mut auto_password,
-                            &mut prompt_tail,
-                            &data,
-                        );
-                        // Emit to all windows; frontend filters by session_id.
-                        let _ = app_data.emit(
-                            "pty:data",
-                            PtyDataPayload {
-                                session_id: id_data.clone(),
-                                data,
-                            },
-                        );
+                    for data in extract_ready_output_chunks(&mut output_decoder, &mut pending) {
+                        maybe_send_auto_password(&session_for_reader, &data);
+                        if chunk_tx.send(data).is_err() {
+                            return;
+                        }
                     }
                 }
                 Err(_) => break,
             }
         }
 
-        if let Some(data) = drain_utf8_tail(&mut pending) {
-            let _ = app_data.emit(
+        if let Some(data) = drain_output_tail(&mut output_decoder, &mut pending) {
+            let _ = chunk_tx.send(data);
+        }
+    });
+
+    // Emitter thread: coalesces whatever backlog accumulated while the
+    // previous emit was in flight into a single event. Adds no latency for
+    // interactive output; batches aggressively under heavy throughput.
+    let app_data = app.clone();
+    let emitter_handle = thread::spawn(move || {
+        while let Ok(first) = chunk_rx.recv() {
+            let mut batch = first;
+            while batch.len() < PTY_EMIT_MAX_BATCH_CHARS {
+                match chunk_rx.try_recv() {
+                    Ok(chunk) => batch.push_str(&chunk),
+                    Err(_) => break,
+                }
+            }
+            let _ = app_data.emit_to(
+                MAIN_WINDOW_LABEL,
                 "pty:data",
                 PtyDataPayload {
                     session_id: id_data.clone(),
-                    data,
+                    data: batch,
                 },
             );
         }
@@ -279,7 +428,10 @@ async fn spawn_pty_command<R: Runtime>(
     let sessions_for_exit = state.sessions.clone();
     thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code()).unwrap_or(1);
-        let _ = app_exit.emit(
+        let _ = reader_handle.join();
+        let _ = emitter_handle.join();
+        let _ = app_exit.emit_to(
+            MAIN_WINDOW_LABEL,
             "pty:exit",
             PtyExitPayload {
                 session_id: id_exit.clone(),
@@ -308,7 +460,7 @@ pub async fn pty_spawn_ssh<R: Runtime>(
         .find(|host| host.id == host_id && !host.deleted)
         .cloned()
         .ok_or_else(|| "Host not found".to_string())?;
-    crate::ssh_config::generate_ssh_config(hosts)?;
+    crate::ssh_config::ensure_ssh_config()?;
 
     let ssh_config_path = crate::ssh_config::get_ssh_config_path();
     let target_alias = if host.alias.trim().is_empty() {
@@ -328,11 +480,21 @@ pub async fn pty_spawn_ssh<R: Runtime>(
         "-o".to_string(),
         "ConnectionAttempts=1".to_string(),
     ];
-    let env = BTreeMap::new();
-    let auto_password = crate::credential_store::keychain_get_password(&host.id)?
+    let env = parse_env_vars(host.env_vars.as_deref())?;
+    for (key, value) in env.iter() {
+        args.extend(["-o".to_string(), format!("SetEnv={key}={value}")]);
+    }
+    let auto_password_state = crate::credential_store::keychain_get_password(&host.id)?
         .map(|password| password.trim().to_string())
-        .filter(|password| !password.is_empty());
-    if auto_password.is_some() {
+        .filter(|password| !password.is_empty())
+        .map(|password| {
+            AutoPasswordState::new(
+                password,
+                AutoPasswordPromptMatcher::for_host(&host),
+                Instant::now() + Duration::from_secs(AUTO_PASSWORD_ARM_SECONDS),
+            )
+        });
+    if auto_password_state.is_some() {
         args.extend(["-o".to_string(), "BatchMode=no".to_string()]);
     }
 
@@ -345,7 +507,8 @@ pub async fn pty_spawn_ssh<R: Runtime>(
         rows,
         None,
         env,
-        auto_password,
+        host.encoding.clone(),
+        auto_password_state,
         app,
         state,
     )
@@ -363,6 +526,12 @@ pub async fn pty_write(
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
         sessions.get(&id).cloned().ok_or("Unavailable session")?
     };
+    if let Ok(mut auto_password) = session.auto_password.lock() {
+        if let Some(state) = auto_password.as_mut() {
+            state.disarm();
+        }
+        *auto_password = None;
+    }
     let mut w = session.writer.lock().map_err(|_| "writer poisoned")?;
     w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
     Ok(())
@@ -406,24 +575,33 @@ pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{drain_utf8_tail, extract_ready_utf8_chunks, should_send_auto_password};
+    use super::{
+        drain_output_tail, extract_ready_output_chunks, parse_env_vars, AutoPasswordPromptMatcher,
+        AutoPasswordState, PtyOutputDecoder,
+    };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn keeps_split_utf8_sequence_until_complete() {
         let mut pending = vec![0xE4, 0xB8];
-        assert!(extract_ready_utf8_chunks(&mut pending).is_empty());
-        assert_eq!(pending, vec![0xE4, 0xB8]);
+        let mut decoder = PtyOutputDecoder::new(Some("utf-8"));
+        assert!(extract_ready_output_chunks(&mut decoder, &mut pending).is_empty());
+        assert!(pending.is_empty());
 
         pending.extend_from_slice(&[0xAD, b'!']);
         let expected = String::from_utf8(vec![0xE4, 0xB8, 0xAD, b'!']).unwrap();
-        assert_eq!(extract_ready_utf8_chunks(&mut pending), vec![expected]);
+        assert_eq!(
+            extract_ready_output_chunks(&mut decoder, &mut pending),
+            vec![expected]
+        );
         assert!(pending.is_empty());
     }
 
     #[test]
     fn replaces_invalid_bytes_without_losing_following_text() {
         let mut pending = vec![b'A', 0xFF, b'B'];
-        let combined = extract_ready_utf8_chunks(&mut pending).join("");
+        let mut decoder = PtyOutputDecoder::new(Some("utf-8"));
+        let combined = extract_ready_output_chunks(&mut decoder, &mut pending).join("");
         assert_eq!(combined, format!("A{}B", char::REPLACEMENT_CHARACTER));
         assert!(pending.is_empty());
     }
@@ -431,29 +609,88 @@ mod tests {
     #[test]
     fn drains_incomplete_tail_lossily_at_eof() {
         let mut pending = vec![b'A', 0xE4, 0xB8];
+        let mut decoder = PtyOutputDecoder::new(Some("utf-8"));
         assert_eq!(
-            extract_ready_utf8_chunks(&mut pending),
+            extract_ready_output_chunks(&mut decoder, &mut pending),
             vec!["A".to_string()]
         );
         assert_eq!(
-            drain_utf8_tail(&mut pending),
+            drain_output_tail(&mut decoder, &mut pending),
             Some(String::from_utf8_lossy(&[0xE4, 0xB8]).to_string())
         );
         assert!(pending.is_empty());
     }
 
     #[test]
-    fn auto_password_matches_only_first_password_prompt() {
-        assert!(should_send_auto_password("user@example.com's password: "));
-        assert!(should_send_auto_password("Password:"));
-        assert!(!should_send_auto_password(
-            "Two-Step Vertification required\nVerification code: "
-        ));
-        assert!(!should_send_auto_password("Enter verification password: "));
-        assert!(!should_send_auto_password(
-            "Enter passphrase for key '/Users/me/.ssh/id_rsa': "
-        ));
-        assert!(!should_send_auto_password("New password: "));
-        assert!(!should_send_auto_password("Confirm password: "));
+    fn decodes_split_gbk_output() {
+        let mut decoder = PtyOutputDecoder::new(Some("gbk"));
+        let mut pending = vec![0xD6];
+        assert!(extract_ready_output_chunks(&mut decoder, &mut pending).is_empty());
+        assert!(pending.is_empty());
+
+        pending.extend_from_slice(&[0xD0, 0xCE, 0xC4]);
+        assert_eq!(
+            extract_ready_output_chunks(&mut decoder, &mut pending),
+            vec!["中文".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_host_env_vars() {
+        let env =
+            parse_env_vars(Some("FOO=bar\nEMPTY=\n# ignored\nNAME=value=with=equals")).unwrap();
+        assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+        assert_eq!(
+            env.get("NAME").map(String::as_str),
+            Some("value=with=equals")
+        );
+        assert!(parse_env_vars(Some("1BAD=value")).is_err());
+        assert!(parse_env_vars(Some("BAD-NAME=value")).is_err());
+    }
+
+    #[test]
+    fn auto_password_matches_only_configured_ssh_target_prompt() {
+        let matcher = AutoPasswordPromptMatcher::new([
+            "example.com".to_string(),
+            "user@example.com".to_string(),
+        ]);
+        assert!(matcher.matches("user@example.com's password: "));
+        assert!(matcher.matches("example.com's password: "));
+        assert!(!matcher.matches("Password:"));
+        assert!(!matcher.matches("Enter password: "));
+        assert!(!matcher.matches("user@other.example.com's password: "));
+        assert!(!matcher.matches("Two-Step Vertification required\nVerification code: "));
+        assert!(!matcher.matches("Enter verification password: "));
+        assert!(!matcher.matches("Enter passphrase for key '/Users/me/.ssh/id_rsa': "));
+        assert!(!matcher.matches("New password: "));
+        assert!(!matcher.matches("Confirm password: "));
+    }
+
+    #[test]
+    fn auto_password_disarms_after_user_input_or_expiry() {
+        let matcher = AutoPasswordPromptMatcher::new(["user@example.com".to_string()]);
+        let now = Instant::now();
+        let mut state = AutoPasswordState::new(
+            "secret".to_string(),
+            matcher.clone(),
+            now + Duration::from_secs(5),
+        );
+
+        state.disarm();
+        assert_eq!(
+            state.take_password_for_output("user@example.com's password: ", now),
+            None
+        );
+
+        let mut expired =
+            AutoPasswordState::new("secret".to_string(), matcher, now + Duration::from_secs(5));
+        assert_eq!(
+            expired.take_password_for_output(
+                "user@example.com's password: ",
+                now + Duration::from_secs(6)
+            ),
+            None
+        );
     }
 }

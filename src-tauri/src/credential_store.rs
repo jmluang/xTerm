@@ -1,7 +1,24 @@
 use keyring::{Entry, Error as KeyringError};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const HOST_PASSWORD_SERVICE: &str = "xTermius";
 const WEBDAV_PASSWORD_ACCOUNT: &str = "webdav-sync";
+
+// Keychain lookups go through securityd (one IPC round-trip each) and
+// hosts_load queries every host, so cache the has-password flag in memory.
+// All keychain writes in this process go through this module, which keeps the
+// cache coherent; external keychain edits are picked up on restart.
+fn has_password_cache() -> &'static Mutex<HashMap<String, bool>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_store(host_id: &str, has_password: bool) {
+    if let Ok(mut cache) = has_password_cache().lock() {
+        cache.insert(host_id.to_string(), has_password);
+    }
+}
 
 fn keychain_entry(host_id: &str) -> Result<Entry, String> {
     Entry::new(HOST_PASSWORD_SERVICE, host_id).map_err(|e| e.to_string())
@@ -15,25 +32,36 @@ pub(crate) fn keychain_set_password(host_id: &str, password: &str) -> Result<(),
         Ok(()) | Err(KeyringError::NoEntry) => {}
         Err(e) => return Err(e.to_string()),
     }
-    entry.set_password(password).map_err(|e| e.to_string())
+    entry.set_password(password).map_err(|e| e.to_string())?;
+    cache_store(host_id, !password.trim().is_empty());
+    Ok(())
 }
 
 pub(crate) fn keychain_has_password(host_id: &str) -> bool {
+    if let Ok(cache) = has_password_cache().lock() {
+        if let Some(&cached) = cache.get(host_id) {
+            return cached;
+        }
+    }
     let entry = match keychain_entry(host_id) {
         Ok(e) => e,
         Err(_) => return false,
     };
-    match entry.get_password() {
+    let has_password = match entry.get_password() {
         Ok(pw) => !pw.trim().is_empty(),
         Err(KeyringError::NoEntry) => false,
-        Err(_) => false,
-    }
+        Err(_) => return false,
+    };
+    cache_store(host_id, has_password);
+    has_password
 }
 
 pub(crate) fn keychain_delete_password(host_id: &str) -> Result<(), String> {
     match keychain_entry(host_id)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(KeyringError::NoEntry) => Ok(()),
+        Ok(()) | Err(KeyringError::NoEntry) => {
+            cache_store(host_id, false);
+            Ok(())
+        }
         Err(e) => Err(e.to_string()),
     }
 }
@@ -44,8 +72,14 @@ pub(crate) fn keychain_get_password(host_id: &str) -> Result<Option<String>, Str
     }
     let entry = keychain_entry(host_id.trim())?;
     match entry.get_password() {
-        Ok(pw) => Ok(Some(pw)),
-        Err(KeyringError::NoEntry) => Ok(None),
+        Ok(pw) => {
+            cache_store(host_id.trim(), !pw.trim().is_empty());
+            Ok(Some(pw))
+        }
+        Err(KeyringError::NoEntry) => {
+            cache_store(host_id.trim(), false);
+            Ok(None)
+        }
         Err(e) => Err(e.to_string()),
     }
 }

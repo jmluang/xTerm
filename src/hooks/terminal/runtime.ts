@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getThemeMode, type ThemeMode } from "@/lib/theme";
@@ -167,6 +168,23 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     }
   }
 
+  // Lightweight path for tab switches: only cursorBlink depends on which
+  // session is active, so avoid re-applying every option (and the full-screen
+  // refresh that comes with it) on hidden terminals.
+  function applyCursorBlink() {
+    const blink = terminalOptionsRef.current.cursorBlink;
+    for (const [id, handle] of terminalRefs.sessionTerminals.current) {
+      try {
+        const next = id === terminalRefs.activeSessionIdRef.current && sessionsCountRef.current > 0 && blink;
+        if (handle.terminal.options.cursorBlink !== next) {
+          handle.terminal.options.cursorBlink = next;
+        }
+      } catch {
+        // Ignore option updates during init/dispose races.
+      }
+    }
+  }
+
   function applyTerminalOptions(sessionId?: string) {
     const options = terminalOptionsRef.current;
     const sessionIds = sessionId ? [sessionId] : Array.from(terminalRefs.sessionTerminals.current.keys());
@@ -285,6 +303,24 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
     applyTerminalTheme(sessionId);
     applyTerminalOptions(sessionId);
+
+    // GPU renderer: much faster than the default DOM renderer for heavy
+    // output. Falls back to the DOM renderer if WebGL is unavailable or the
+    // context is lost (e.g. too many concurrent contexts).
+    try {
+      const webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => {
+        try {
+          webglAddon.dispose();
+        } catch {
+          // ignore
+        }
+      });
+      term.loadAddon(webglAddon);
+    } catch (error) {
+      console.debug("[xterm] webgl renderer unavailable, using DOM renderer", error);
+    }
+
     safeFit(fitAddon);
 
     const pendingText = takeSessionBuffer(runtimeRefs.sessionBuffers.current, sessionId);
@@ -351,7 +387,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
   useEffect(() => {
     terminalRefs.activeSessionIdRef.current = activeSessionId;
     syncActiveTerminalHandle();
-    applyTerminalOptions();
+    applyCursorBlink();
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -383,9 +419,15 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
 
   useEffect(() => {
     applyTerminalOptions();
+    if (!terminalRefs.activeSessionIdRef.current) return;
+    scheduleFitAndResize(20);
+  }, [terminalOptions]);
+
+  useEffect(() => {
+    applyCursorBlink();
     if (!activeSessionId) return;
     scheduleFitAndResize(20);
-  }, [terminalOptions, sessions.length, activeSessionId]);
+  }, [sessions.length, activeSessionId]);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -451,7 +493,7 @@ export function useTerminalRuntime(params: UseTerminalRuntimeParams) {
     const start = performance.now();
     const raf = window.requestAnimationFrame(() => {
       syncActiveTerminalHandle();
-      applyTerminalOptions();
+      applyCursorBlink();
       scheduleFitAndResize(0);
       window.requestAnimationFrame(() => {
         try {

@@ -1,5 +1,6 @@
 use crate::credential_store::keychain_get_password;
 use crate::models::Host;
+use crate::ssh_config::{ensure_ssh_config, get_ssh_config_path};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -25,6 +26,7 @@ pub struct HostStaticInfo {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostLiveProcess {
+    pub pid: Option<u32>,
     pub command: String,
     pub cpu_percent: f64,
     pub mem_percent: f64,
@@ -93,17 +95,31 @@ fn parse_kv(stdout: &str) -> (HashMap<String, String>, Vec<String>) {
     (kv, proc_lines)
 }
 
-fn target_of(host: &Host) -> String {
-    let user = host.user.trim();
-    let hostname = host.hostname.trim();
-    if user.is_empty() {
-        hostname.to_string()
+fn target_alias_of(host: &Host) -> String {
+    if host.alias.trim().is_empty() {
+        host.hostname.trim().to_string()
     } else {
-        format!("{user}@{hostname}")
+        host.alias.trim().to_string()
     }
 }
 
-fn create_askpass_script(password: &str) -> Result<PathBuf, String> {
+struct AskpassScript {
+    path: PathBuf,
+}
+
+impl AskpassScript {
+    fn path(&self) -> &std::path::Path {
+        self.path.as_path()
+    }
+}
+
+impl Drop for AskpassScript {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn create_askpass_script(password: &str) -> Result<AskpassScript, String> {
     let script = format!("#!/bin/sh\nprintf '%s\\n' {}\n", shell_quote(password));
 
     for attempt in 0..16 {
@@ -123,7 +139,7 @@ fn create_askpass_script(password: &str) -> Result<PathBuf, String> {
             Ok(mut file) => {
                 file.write_all(script.as_bytes())
                     .map_err(|e| e.to_string())?;
-                return Ok(path);
+                return Ok(AskpassScript { path });
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
@@ -133,71 +149,138 @@ fn create_askpass_script(password: &str) -> Result<PathBuf, String> {
     Err("failed to create askpass script".to_string())
 }
 
-fn run_probe(host: &Host, script: &str) -> Result<String, String> {
-    let target = target_of(host);
-    if target.trim().is_empty() {
-        return Err("hostname is required".to_string());
+#[cfg(test)]
+mod tests {
+    use super::{create_askpass_script, probe_ssh_args};
+    use crate::models::Host;
+
+    #[test]
+    fn askpass_script_is_removed_when_guard_drops() {
+        let script = create_askpass_script("secret").unwrap();
+        let path = script.path().to_path_buf();
+        assert!(path.exists());
+        drop(script);
+        assert!(!path.exists());
     }
 
-    let mut args: Vec<String> = vec![
+    #[test]
+    fn probe_uses_generated_ssh_config_and_alias() {
+        let host = Host {
+            id: "1".to_string(),
+            sort_order: Some(0),
+            name: "prod".to_string(),
+            alias: "prod-box".to_string(),
+            hostname: "10.0.0.9".to_string(),
+            user: "root".to_string(),
+            port: 2222,
+            password: None,
+            has_password: false,
+            host_insights_enabled: true,
+            host_live_metrics_enabled: true,
+            identity_file: Some("/tmp/key".to_string()),
+            proxy_jump: Some("jump".to_string()),
+            env_vars: None,
+            encoding: Some("utf-8".to_string()),
+            tags: vec![],
+            notes: "".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            deleted: false,
+        };
+        let args = probe_ssh_args(
+            &host,
+            "/tmp/xtermius/ssh_config",
+            "/tmp/xtermius/probe_mux_%C",
+            false,
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-F", "/tmp/xtermius/ssh_config"]));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "-p" || arg == "-i" || arg == "-J"));
+        assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+        assert!(args.iter().any(|arg| arg == "ControlMaster=auto"));
+        assert!(args.iter().any(|arg| arg == "ControlPersist=30s"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "ControlPath=/tmp/xtermius/probe_mux_%C"));
+        assert!(args.iter().any(|arg| arg == "BatchMode=yes"));
+        assert_eq!(args.last().map(String::as_str), Some("prod-box"));
+    }
+}
+
+fn probe_ssh_args(
+    host: &Host,
+    ssh_config_path: &str,
+    control_path: &str,
+    has_password: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "-F".to_string(),
+        ssh_config_path.to_string(),
         "-o".to_string(),
         "ConnectTimeout=8".to_string(),
         "-o".to_string(),
         "ConnectionAttempts=1".to_string(),
         "-o".to_string(),
-        "StrictHostKeyChecking=yes".to_string(),
-        "-o".to_string(),
         "ServerAliveInterval=10".to_string(),
         "-o".to_string(),
         "ServerAliveCountMax=1".to_string(),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        "ControlPersist=30s".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={control_path}"),
     ];
+    if has_password {
+        args.push("-o".to_string());
+        args.push("BatchMode=no".to_string());
+        args.push("-o".to_string());
+        args.push("NumberOfPasswordPrompts=1".to_string());
+    } else {
+        args.push("-o".to_string());
+        args.push("BatchMode=yes".to_string());
+    }
+    args.push(target_alias_of(host));
+    args
+}
 
-    if host.port > 0 {
-        args.push("-p".to_string());
-        args.push(host.port.to_string());
-    }
-    if let Some(path) = host
-        .identity_file
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        args.push("-i".to_string());
-        args.push(path.to_string());
-    }
-    if let Some(jump) = host
-        .proxy_jump
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        args.push("-J".to_string());
-        args.push(jump.to_string());
+fn run_probe(host: &Host, script: &str) -> Result<String, String> {
+    let target = target_alias_of(host);
+    if target.trim().is_empty() {
+        return Err("hostname is required".to_string());
     }
 
-    let mut askpass_path: Option<PathBuf> = None;
+    ensure_ssh_config()?;
+
+    let mut askpass_script: Option<AskpassScript> = None;
     let mut cmd = Command::new("/usr/bin/ssh");
     let maybe_password = keychain_get_password(&host.id).ok().flatten();
+    let has_password = maybe_password
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let ssh_config_path = get_ssh_config_path();
+    let control_path = ssh_config_path.with_file_name("probe_mux_%C");
+    let mut args = probe_ssh_args(
+        host,
+        ssh_config_path.to_string_lossy().as_ref(),
+        control_path.to_string_lossy().as_ref(),
+        has_password,
+    );
     if let Some(password) = maybe_password
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
-        let p = create_askpass_script(password)?;
-        askpass_path = Some(p.clone());
-        args.push("-o".to_string());
-        args.push("BatchMode=no".to_string());
-        args.push("-o".to_string());
-        args.push("NumberOfPasswordPrompts=1".to_string());
+        let script = create_askpass_script(password)?;
         cmd.env("DISPLAY", "xtermius:0");
         cmd.env("SSH_ASKPASS_REQUIRE", "force");
-        cmd.env("SSH_ASKPASS", p.as_os_str());
-    } else {
-        args.push("-o".to_string());
-        args.push("BatchMode=yes".to_string());
+        cmd.env("SSH_ASKPASS", script.path().as_os_str());
+        askpass_script = Some(script);
     }
 
-    args.push(target);
     args.push("sh".to_string());
     args.push("-lc".to_string());
     args.push(script.to_string());
@@ -210,9 +293,7 @@ fn run_probe(host: &Host, script: &str) -> Result<String, String> {
         .output()
         .map_err(|e| e.to_string())?;
 
-    if let Some(path) = askpass_path {
-        let _ = fs::remove_file(path);
-    }
+    drop(askpass_script);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -359,9 +440,14 @@ printf 'load_5=%s\n' "$LOAD_5"
 printf 'load_15=%s\n' "$LOAD_15"
 printf 'disk_root_total_kb=%s\n' "$DISK_TOTAL_KB"
 printf 'disk_root_used_kb=%s\n' "$DISK_USED_KB"
-ps -eo comm=,pcpu=,pmem= --sort=-pcpu 2>/dev/null | head -n 5 | while read -r cmd cpu mem; do
+PROC_LINES="$(ps -eo pid=,comm=,pcpu=,pmem= --sort=-pcpu 2>/dev/null | head -n 5 || true)"
+if [ -z "$PROC_LINES" ]; then
+  PROC_LINES="$(ps -Ao pid=,comm=,pcpu=,pmem= -r 2>/dev/null | head -n 5 || true)"
+fi
+printf '%s\n' "$PROC_LINES" | while read -r pid cmd cpu mem; do
+  [ -n "$pid" ] || continue
   [ -n "$cmd" ] || continue
-  printf 'proc=%s|%s|%s\n' "$cmd" "$cpu" "$mem"
+  printf 'proc=%s|%s|%s|%s\n' "$pid" "$cmd" "$cpu" "$mem"
 done
 "#;
 
@@ -370,6 +456,7 @@ done
     let mut processes = Vec::new();
     for line in proc_lines {
         let mut parts = line.split('|');
+        let pid = parts.next().unwrap_or("").trim().parse::<u32>().ok();
         let command = parts.next().unwrap_or("").trim().to_string();
         let cpu_percent = parts
             .next()
@@ -387,6 +474,7 @@ done
             continue;
         }
         processes.push(HostLiveProcess {
+            pid,
             command,
             cpu_percent,
             mem_percent,

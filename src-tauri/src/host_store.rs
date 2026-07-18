@@ -7,6 +7,7 @@ use crate::ssh_config::generate_ssh_config;
 use rusqlite::{params, Connection};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Once;
 
 fn get_config_dir() -> PathBuf {
     dirs::config_dir()
@@ -192,6 +193,24 @@ pub(crate) fn import_hosts_json_to_db(
     Ok(())
 }
 
+fn sanitize_hosts_for_frontend(hosts: Vec<Host>) -> Vec<Host> {
+    hosts
+        .into_iter()
+        .map(|mut host| {
+            if host
+                .password
+                .as_ref()
+                .map(|password| !password.trim().is_empty())
+                .unwrap_or(false)
+            {
+                host.has_password = true;
+            }
+            host.password = None;
+            host
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn hosts_load() -> Result<Vec<Host>, String> {
     ensure_config_dir()?;
@@ -204,13 +223,19 @@ pub fn hosts_load() -> Result<Vec<Host>, String> {
             let mut conn = open_hosts_db()?;
             import_hosts_json_to_db(&mut conn, hosts.clone())?;
             let _ = generate_ssh_config(hosts.clone());
-            return Ok(hosts);
+            return Ok(sanitize_hosts_for_frontend(hosts));
         }
     }
 
     let conn = open_hosts_db()?;
     ensure_hosts_schema(&conn)?;
-    let _ = migrate_db_passwords_to_keychain(&conn);
+    // Legacy plaintext-password migration only needs one best-effort pass per
+    // process; hosts_load is on hot paths (spawn, probes) where the repeated
+    // table scan plus keychain writes would add avoidable latency.
+    static PASSWORD_MIGRATION: Once = Once::new();
+    PASSWORD_MIGRATION.call_once(|| {
+        let _ = migrate_db_passwords_to_keychain(&conn);
+    });
 
     let mut stmt = conn
         .prepare(
@@ -339,4 +364,39 @@ pub fn settings_save(mut settings: Settings) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&path, content).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_hosts_for_frontend;
+    use crate::models::Host;
+
+    #[test]
+    fn sanitize_hosts_for_frontend_removes_plaintext_passwords() {
+        let hosts = vec![Host {
+            id: "1".to_string(),
+            sort_order: Some(0),
+            name: "prod".to_string(),
+            alias: "prod".to_string(),
+            hostname: "example.com".to_string(),
+            user: "root".to_string(),
+            port: 22,
+            password: Some("secret".to_string()),
+            has_password: false,
+            host_insights_enabled: true,
+            host_live_metrics_enabled: true,
+            identity_file: None,
+            proxy_jump: None,
+            env_vars: None,
+            encoding: Some("utf-8".to_string()),
+            tags: vec![],
+            notes: "".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            deleted: false,
+        }];
+
+        let sanitized = sanitize_hosts_for_frontend(hosts);
+        assert_eq!(sanitized[0].password, None);
+        assert!(sanitized[0].has_password);
+    }
 }

@@ -2,6 +2,20 @@ use crate::host_store::ensure_config_dir;
 use crate::models::Host;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Set once this process has written a config that reflects the current host
+// list. hosts_save regenerates on every change, so callers that merely need a
+// valid config on disk (spawn/probe) can skip the load-and-rewrite.
+static SSH_CONFIG_WRITTEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn ensure_ssh_config() -> Result<(), String> {
+    if SSH_CONFIG_WRITTEN.load(Ordering::Acquire) && get_ssh_config_path().exists() {
+        return Ok(());
+    }
+    let hosts = crate::host_store::hosts_load()?;
+    generate_ssh_config(hosts)
+}
 
 pub(crate) fn get_ssh_config_path() -> PathBuf {
     dirs::config_dir()
@@ -129,6 +143,7 @@ pub fn generate_ssh_config(hosts: Vec<Host>) -> Result<(), String> {
     }
     let path = get_ssh_config_path();
     fs::write(&path, config).map_err(|e| e.to_string())?;
+    SSH_CONFIG_WRITTEN.store(true, Ordering::Release);
     Ok(())
 }
 
