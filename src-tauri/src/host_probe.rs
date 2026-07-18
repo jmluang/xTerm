@@ -198,7 +198,7 @@ mod tests {
         assert!(!args
             .iter()
             .any(|arg| arg == "-p" || arg == "-i" || arg == "-J"));
-        assert!(!args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
+        assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
         assert!(args.iter().any(|arg| arg == "ControlMaster=auto"));
         assert!(args.iter().any(|arg| arg == "ControlPersist=30s"));
         assert!(args
@@ -222,6 +222,11 @@ fn probe_ssh_args(
         "ConnectTimeout=8".to_string(),
         "-o".to_string(),
         "ConnectionAttempts=1".to_string(),
+        // Probes must never fall back to the interactive "ask" host-key prompt:
+        // with SSH_ASKPASS_REQUIRE=force the yes/no confirmation would be answered
+        // by the askpass script (with the password) in an infinite loop.
+        "-o".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
         "-o".to_string(),
         "ServerAliveInterval=10".to_string(),
         "-o".to_string(),

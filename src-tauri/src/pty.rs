@@ -109,6 +109,14 @@ fn parse_env_vars(input: Option<&str>) -> Result<BTreeMap<String, String>, Strin
         {
             return Err(format!("Invalid env var name on line {}: {key}", index + 1));
         }
+        // Values are forwarded via `-o SetEnv=KEY=VALUE`; whitespace or quotes there
+        // would be re-tokenized by ssh's config parser and break the connection.
+        if value.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch.is_control()) {
+            return Err(format!(
+                "Invalid env var value on line {}: {key} must not contain whitespace or quotes (one KEY=VALUE per line)",
+                index + 1
+            ));
+        }
         env.insert(key.to_string(), value.to_string());
     }
     Ok(env)
@@ -647,6 +655,12 @@ mod tests {
         );
         assert!(parse_env_vars(Some("1BAD=value")).is_err());
         assert!(parse_env_vars(Some("BAD-NAME=value")).is_err());
+        // Whitespace/quotes in values would be re-tokenized by ssh's SetEnv parsing.
+        assert!(parse_env_vars(Some("FOO=some value")).is_err());
+        assert!(parse_env_vars(Some("FOO=\"quoted\"")).is_err());
+        // The legacy comma-separated single-line format must fail loudly, not
+        // silently fold everything into the first variable.
+        assert!(parse_env_vars(Some("VAR1=value1, VAR2=value2")).is_err());
     }
 
     #[test]

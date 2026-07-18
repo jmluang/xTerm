@@ -278,11 +278,16 @@ export function HostEditorDialog(props: {
                   </div>
                   <div className="grid gap-2">
                     <label className="text-sm font-medium">Environment Variables</label>
-                    <Input
+                    <textarea
+                      className="min-h-[72px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       value={formData.envVars || ""}
                       onChange={(e) => setFormData({ ...formData, envVars: e.target.value })}
-                      placeholder="VAR1=value1, VAR2=value2"
+                      placeholder={"VAR1=value1\nVAR2=value2"}
+                      spellCheck={false}
                     />
+                    <div className="text-[11px] text-muted-foreground">
+                      One KEY=VALUE per line. Values must not contain spaces or quotes.
+                    </div>
                   </div>
                   <div className="grid gap-2">
                     <label className="text-sm font-medium">Encoding</label>
