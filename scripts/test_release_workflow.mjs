@@ -62,6 +62,7 @@ check("CI workflow runs frontend, Rust, and updater regression checks", () => {
       "npm run test:security",
       "npm run test:frontend-regressions",
       "cargo test",
+      "npm run tauri build -- --no-bundle",
       "npm run test:updater",
     ],
     ".github/workflows/ci.yml"
@@ -70,6 +71,28 @@ check("CI workflow runs frontend, Rust, and updater regression checks", () => {
     workflow,
     /EXPECTED_RELEASE_VERSION="\$\(node -p "require\('\.\/package\.json'\)\.version"\)"\s+npm run test:updater/,
     "CI updater regressions must use the checked-out package version instead of relying on fetched git tags"
+  );
+});
+
+check("Tauri JavaScript API is pinned to the locked Rust minor release", () => {
+  const packageJson = JSON.parse(read("package.json"));
+  const packageLock = JSON.parse(read("package-lock.json"));
+  const apiVersion = packageJson.dependencies?.["@tauri-apps/api"];
+  const lockedApiVersion = packageLock.packages?.["node_modules/@tauri-apps/api"]?.version;
+  const cargoLock = read("src-tauri/Cargo.lock");
+  const tauriVersion = cargoLock.match(/\[\[package\]\]\nname = "tauri"\nversion = "([^"]+)"/)?.[1];
+
+  assert.match(
+    apiVersion ?? "",
+    /^\d+\.\d+\.\d+$/,
+    "@tauri-apps/api must use an exact version to prevent lockfile-only minor upgrades"
+  );
+  assert.equal(apiVersion, lockedApiVersion, "package.json and package-lock.json must agree on @tauri-apps/api");
+  assert.ok(tauriVersion, "Cargo.lock must contain the resolved tauri package version");
+  assert.equal(
+    apiVersion.split(".").slice(0, 2).join("."),
+    tauriVersion.split(".").slice(0, 2).join("."),
+    "@tauri-apps/api and Rust tauri must use the same major/minor version"
   );
 });
 

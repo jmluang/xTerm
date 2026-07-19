@@ -51,3 +51,6 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify Tauri production build
+        run: npm run tauri build -- --no-bundle
