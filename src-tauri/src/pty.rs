@@ -4,16 +4,13 @@ use std::{
     collections::{BTreeMap, HashMap},
     ffi::OsString,
     io::{Read, Write},
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        mpsc, Arc, Mutex,
-    },
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Runtime};
 
-type SessionId = u32;
+type SessionId = String;
 const AUTO_PASSWORD_TAIL_CHARS: usize = 512;
 const AUTO_PASSWORD_ARM_SECONDS: u64 = 15;
 // Terminal UI lives in the main window; targeted emits avoid serializing
@@ -111,7 +108,10 @@ fn parse_env_vars(input: Option<&str>) -> Result<BTreeMap<String, String>, Strin
         }
         // Values are forwarded via `-o SetEnv=KEY=VALUE`; whitespace or quotes there
         // would be re-tokenized by ssh's config parser and break the connection.
-        if value.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch.is_control()) {
+        if value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '"' || ch.is_control())
+        {
             return Err(format!(
                 "Invalid env var value on line {}: {key} must not contain whitespace or quotes (one KEY=VALUE per line)",
                 index + 1
@@ -123,14 +123,12 @@ fn parse_env_vars(input: Option<&str>) -> Result<BTreeMap<String, String>, Strin
 }
 
 pub struct PtyState {
-    next_id: AtomicU32,
     sessions: Arc<Mutex<HashMap<SessionId, Arc<Session>>>>,
 }
 
 impl Default for PtyState {
     fn default() -> Self {
         Self {
-            next_id: AtomicU32::new(1),
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -316,6 +314,7 @@ fn maybe_send_auto_password(session: &Arc<Session>, data: &str) {
 }
 
 async fn spawn_pty_command<R: Runtime>(
+    session_id: String,
     file: String,
     args: Vec<String>,
     cols: u16,
@@ -327,6 +326,10 @@ async fn spawn_pty_command<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, PtyState>,
 ) -> Result<String, String> {
+    if session_id.trim().is_empty() {
+        return Err("session_id is required".to_string());
+    }
+
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -361,8 +364,7 @@ async fn spawn_pty_command<R: Runtime>(
     };
     let killer = child.clone_killer();
 
-    let id = state.next_id.fetch_add(1, Ordering::Relaxed);
-    let id_s = id.to_string();
+    let id = session_id;
 
     let session = Arc::new(Session {
         master: Mutex::new(master),
@@ -373,12 +375,17 @@ async fn spawn_pty_command<R: Runtime>(
 
     {
         let mut sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
-        sessions.insert(id, session.clone());
+        if sessions.contains_key(&id) {
+            let mut killer = session.killer.lock().map_err(|_| "killer poisoned")?;
+            let _ = killer.kill();
+            return Err("session_id is already in use".to_string());
+        }
+        sessions.insert(id.clone(), session.clone());
     }
 
     // Reader thread: blocks on PTY read, decodes, and hands chunks to the
     // emitter thread. Kept separate so slow event emission never stalls reads.
-    let id_data = id_s.clone();
+    let id_data = id.clone();
     let session_for_reader = session.clone();
     let mut output_decoder = PtyOutputDecoder::new(encoding.as_deref());
     let (chunk_tx, chunk_rx) = mpsc::channel::<String>();
@@ -432,7 +439,8 @@ async fn spawn_pty_command<R: Runtime>(
 
     // Wait thread: emits exit event and removes session from state.
     let app_exit = app.clone();
-    let id_exit = id_s.clone();
+    let id_exit = id.clone();
+    let id_for_cleanup = id.clone();
     let sessions_for_exit = state.sessions.clone();
     thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code()).unwrap_or(1);
@@ -447,15 +455,16 @@ async fn spawn_pty_command<R: Runtime>(
             },
         );
         if let Ok(mut sessions) = sessions_for_exit.lock() {
-            sessions.remove(&id);
+            sessions.remove(&id_for_cleanup);
         }
     });
 
-    Ok(id_s)
+    Ok(id)
 }
 
 #[tauri::command]
 pub async fn pty_spawn_ssh<R: Runtime>(
+    session_id: String,
     host_id: String,
     cols: u16,
     rows: u16,
@@ -509,6 +518,7 @@ pub async fn pty_spawn_ssh<R: Runtime>(
     args.push(target_alias);
 
     spawn_pty_command(
+        session_id,
         "/usr/bin/ssh".to_string(),
         args,
         cols,
@@ -529,10 +539,12 @@ pub async fn pty_write(
     data: String,
     state: tauri::State<'_, PtyState>,
 ) -> Result<(), String> {
-    let id: u32 = session_id.parse().map_err(|_| "invalid session_id")?;
     let session = {
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
-        sessions.get(&id).cloned().ok_or("Unavailable session")?
+        sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or("Unavailable session")?
     };
     if let Ok(mut auto_password) = session.auto_password.lock() {
         if let Some(state) = auto_password.as_mut() {
@@ -552,10 +564,12 @@ pub async fn pty_resize(
     rows: u16,
     state: tauri::State<'_, PtyState>,
 ) -> Result<(), String> {
-    let id: u32 = session_id.parse().map_err(|_| "invalid session_id")?;
     let session = {
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
-        sessions.get(&id).cloned().ok_or("Unavailable session")?
+        sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or("Unavailable session")?
     };
     let master = session.master.lock().map_err(|_| "master poisoned")?;
     master
@@ -571,10 +585,12 @@ pub async fn pty_resize(
 
 #[tauri::command]
 pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> Result<(), String> {
-    let id: u32 = session_id.parse().map_err(|_| "invalid session_id")?;
     let session = {
         let sessions = state.sessions.lock().map_err(|_| "PtyState poisoned")?;
-        sessions.get(&id).cloned().ok_or("Unavailable session")?
+        sessions
+            .get(&session_id)
+            .cloned()
+            .ok_or("Unavailable session")?
     };
     let mut k = session.killer.lock().map_err(|_| "killer poisoned")?;
     k.kill().map_err(|e| e.to_string())?;

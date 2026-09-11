@@ -16,15 +16,14 @@ type UsePtyEventsParams = {
 
 type PtyDataQueueState = {
   chunks: string[];
+  chunkStart: number;
   queuedChars: number;
   rafId: number | null;
   timerId: number | null;
   writing: boolean;
-  backpressureCompactions: number;
 };
 
 const PTY_DATA_BATCH_CHARS = 64_000;
-const PTY_DATA_BACKPRESSURE_CHARS = 512_000;
 // rAF stalls while the window is occluded/minimized (WKWebView pauses it), so
 // flushes are also armed with a timer. Without it, PTY output sits unparsed
 // until the window is visible again, and xterm's automatic replies to terminal
@@ -50,42 +49,76 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     if (!queue) {
       queue = {
         chunks: [],
+        chunkStart: 0,
         queuedChars: 0,
         rafId: null,
         timerId: null,
         writing: false,
-        backpressureCompactions: 0,
       };
       ptyDataQueues.current.set(sessionId, queue);
     }
     return queue;
   }
 
-  function compactPtyDataQueueForBackpressure(queue: PtyDataQueueState) {
-    if (queue.queuedChars < PTY_DATA_BACKPRESSURE_CHARS) return;
-    if (queue.chunks.length < 2) return;
-    queue.chunks = [queue.chunks.join("")];
-    queue.backpressureCompactions += 1;
+  function compactConsumedPtyDataChunks(queue: PtyDataQueueState) {
+    if (queue.chunkStart === 0) return;
+    if (queue.chunkStart >= queue.chunks.length) {
+      queue.chunks = [];
+      queue.chunkStart = 0;
+      return;
+    }
+    if (queue.chunkStart < 256 || queue.chunkStart * 2 < queue.chunks.length) return;
+    queue.chunks = queue.chunks.slice(queue.chunkStart);
+    queue.chunkStart = 0;
+  }
+
+  function isHighSurrogate(code: number) {
+    return code >= 0xd800 && code <= 0xdbff;
+  }
+
+  function isLowSurrogate(code: number) {
+    return code >= 0xdc00 && code <= 0xdfff;
+  }
+
+  function takeUtf16SafePrefixLength(chunk: string, maxChars: number) {
+    let length = Math.min(chunk.length, maxChars);
+    // Do not cut a surrogate pair that is present in one PTY event. xterm's
+    // streaming decoder preserves a pair that happens to cross two writes.
+    if (
+      length > 0 &&
+      length < chunk.length &&
+      isHighSurrogate(chunk.charCodeAt(length - 1)) &&
+      isLowSurrogate(chunk.charCodeAt(length))
+    ) {
+      length -= 1;
+    }
+    return length;
   }
 
   function takePtyDataBatch(queue: PtyDataQueueState): string {
-    let batch = "";
-    while (queue.chunks.length > 0 && batch.length < PTY_DATA_BATCH_CHARS) {
-      const chunk = queue.chunks[0] ?? "";
-      const remaining = PTY_DATA_BATCH_CHARS - batch.length;
-      if (chunk.length <= remaining || batch.length === 0) {
-        batch += chunk;
-        queue.chunks.shift();
-        queue.queuedChars -= chunk.length;
-        continue;
+    const batchChunks: string[] = [];
+    let batchChars = 0;
+    while (queue.chunkStart < queue.chunks.length && batchChars < PTY_DATA_BATCH_CHARS) {
+      const chunk = queue.chunks[queue.chunkStart] ?? "";
+      const remaining = PTY_DATA_BATCH_CHARS - batchChars;
+      const takeLength = takeUtf16SafePrefixLength(chunk, remaining);
+
+      if (takeLength === 0) {
+        break;
       }
 
-      batch += chunk.slice(0, remaining);
-      queue.chunks[0] = chunk.slice(remaining);
-      queue.queuedChars -= remaining;
+      batchChunks.push(chunk.slice(0, takeLength));
+      batchChars += takeLength;
+      queue.queuedChars -= takeLength;
+      if (takeLength === chunk.length) {
+        queue.chunkStart += 1;
+      } else {
+        queue.chunks[queue.chunkStart] = chunk.slice(takeLength);
+      }
     }
     if (queue.queuedChars < 0) queue.queuedChars = 0;
-    return batch;
+    compactConsumedPtyDataChunks(queue);
+    return batchChunks.join("");
   }
 
   function cancelScheduledFlush(queue: PtyDataQueueState) {
@@ -110,24 +143,8 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     const queue = ptyDataQueues.current.get(sessionId);
     if (!queue) return;
     cancelScheduledFlush(queue);
-    const pending = queue.chunks.join("");
-    queue.chunks = [];
-    queue.queuedChars = 0;
-    ptyDataQueues.current.delete(sessionId);
-    if (!pending) return;
-
-    const handle = terminalRefs.sessionTerminals.current.get(sessionId);
-    if (!handle) {
-      appendSessionBuffer(sessionBuffers.current, sessionId, pending, MAX_SESSION_BUFFER_CHARS);
-      return;
-    }
-
-    try {
-      handle.terminal.write(pending);
-    } catch (error) {
-      console.debug("[xterm] immediate queued write skipped (pty:exit)", error);
-      appendSessionBuffer(sessionBuffers.current, sessionId, pending, MAX_SESSION_BUFFER_CHARS);
-    }
+    if (queue.writing) return;
+    flushPtyDataQueue(sessionId);
   }
 
   function flushPtyDataQueue(sessionId: string) {
@@ -136,9 +153,15 @@ export function usePtyEvents(params: UsePtyEventsParams) {
 
     const handle = terminalRefs.sessionTerminals.current.get(sessionId);
     if (!handle) {
-      const pending = queue.chunks.join("");
+      if (!sessionMeta.current.has(sessionId)) {
+        clearPtyDataQueue(sessionId);
+        return;
+      }
+      const pending = queue.chunks.slice(queue.chunkStart);
       clearPtyDataQueue(sessionId);
-      appendSessionBuffer(sessionBuffers.current, sessionId, pending, MAX_SESSION_BUFFER_CHARS);
+      for (const chunk of pending) {
+        appendSessionBuffer(sessionBuffers.current, sessionId, chunk, MAX_SESSION_BUFFER_CHARS);
+      }
       return;
     }
 
@@ -189,7 +212,6 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     const queue = ensurePtyDataQueue(sessionId);
     queue.chunks.push(data);
     queue.queuedChars += data.length;
-    compactPtyDataQueueForBackpressure(queue);
     schedulePtyDataFlush(sessionId);
   }
 
@@ -214,7 +236,8 @@ export function usePtyEvents(params: UsePtyEventsParams) {
 
     const unlistenDataP = listen<{ session_id: string; data: string }>("pty:data", (event) => {
       const { session_id: sessionId, data } = event.payload;
-      if (!data) return;
+      const meta = sessionMeta.current.get(sessionId);
+      if (!data || !meta || meta.closed) return;
 
       if (!sessionHadAnyOutput.current.has(sessionId)) {
         sessionHadAnyOutput.current.add(sessionId);
@@ -227,10 +250,7 @@ export function usePtyEvents(params: UsePtyEventsParams) {
           window.clearTimeout(timer);
           sessionConnectTimers.current.delete(sessionId);
         }
-        const meta = sessionMeta.current.get(sessionId);
-        if (meta) {
-          releaseSessionConnectingCount(sessionId, meta.hostId);
-        }
+        releaseSessionConnectingCount(sessionId, meta.hostId);
       }
 
       enqueuePtyDataWrite(sessionId, data);
@@ -239,6 +259,25 @@ export function usePtyEvents(params: UsePtyEventsParams) {
     const unlistenExitP = listen<{ session_id: string; code: number }>("pty:exit", (event) => {
       const { session_id: sessionId, code: exitCode } = event.payload;
       const endedAt = Date.now();
+      const meta = sessionMeta.current.get(sessionId);
+      if (!meta || meta.closed) {
+        if (meta) {
+          releaseSessionConnectingCount(sessionId, meta.hostId);
+          sessionMeta.current.delete(sessionId);
+        }
+        clearPtyDataQueue(sessionId);
+        sessionBuffers.current.delete(sessionId);
+        sessionHadAnyOutput.current.delete(sessionId);
+        sessionConnectingCounted.current.delete(sessionId);
+        sessionCloseReason.current.delete(sessionId);
+        const timer = sessionConnectTimers.current.get(sessionId);
+        if (timer !== undefined) {
+          window.clearTimeout(timer);
+          sessionConnectTimers.current.delete(sessionId);
+        }
+        return;
+      }
+
       const reason = sessionCloseReason.current.get(sessionId) ?? "unknown";
       const shouldKeepFailedTab = reason === "timeout" || (exitCode > 0);
 
@@ -248,28 +287,26 @@ export function usePtyEvents(params: UsePtyEventsParams) {
         );
       } else {
         setSessions((prev) => prev.filter((session) => session.id !== sessionId));
-        if (terminalRefs.activeSessionIdRef.current === sessionId) {
-          setActiveSessionId(null);
-        }
+        setActiveSessionId((current) => (current === sessionId ? null : current));
       }
 
-      const meta = sessionMeta.current.get(sessionId);
-      if (meta) {
-        releaseSessionConnectingCount(sessionId, meta.hostId);
-      }
+      releaseSessionConnectingCount(sessionId, meta.hostId);
       sessionMeta.current.delete(sessionId);
       sessionConnectingCounted.current.delete(sessionId);
       sessionCloseReason.current.delete(sessionId);
       sessionHadAnyOutput.current.delete(sessionId);
       const timer = sessionConnectTimers.current.get(sessionId);
-      if (timer) {
+      if (timer !== undefined) {
         window.clearTimeout(timer);
         sessionConnectTimers.current.delete(sessionId);
       }
 
-      if (shouldKeepFailedTab) flushPtyDataQueueImmediately(sessionId);
-      if (!shouldKeepFailedTab) sessionBuffers.current.delete(sessionId);
-      clearPtyDataQueue(sessionId);
+      if (shouldKeepFailedTab) {
+        flushPtyDataQueueImmediately(sessionId);
+      } else {
+        sessionBuffers.current.delete(sessionId);
+        clearPtyDataQueue(sessionId);
+      }
     });
 
     return () => {

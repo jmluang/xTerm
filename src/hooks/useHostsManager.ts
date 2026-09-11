@@ -11,7 +11,6 @@ function clampHostPort(port: number | undefined) {
 export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boolean }) {
   const { isInTauri, sidebarOpen } = params;
   const [hosts, setHosts] = useState<Host[]>([]);
-  const hostsRef = useRef<Host[]>([]);
   const [hostSearch, setHostSearch] = useState("");
   const hostListRef = useRef<HTMLDivElement>(null);
   const [hostListScrollable, setHostListScrollable] = useState(false);
@@ -22,10 +21,6 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
   const [showSshImportDialog, setShowSshImportDialog] = useState(false);
   const [sshImportLoading, setSshImportLoading] = useState(false);
   const [sshImportCandidates, setSshImportCandidates] = useState<SshConfigImportCandidate[]>([]);
-
-  useEffect(() => {
-    hostsRef.current = hosts;
-  }, [hosts]);
 
   async function saveHostsToBackend(newHosts: Host[]) {
     if (isInTauri) {
@@ -393,7 +388,6 @@ export function useHostsManager(params: { isInTauri: boolean; sidebarOpen: boole
   return {
     hosts,
     setHosts,
-    hostsRef,
     loadHosts,
     hostSearch,
     setHostSearch,

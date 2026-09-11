@@ -2,15 +2,13 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { configDir } from "@tauri-apps/api/path";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
-import type { RefObject } from "react";
 import type { Host, Settings } from "@/types/models";
 
 export function useWebdavSync(params: {
   isInTauri: boolean;
-  hostsRef: RefObject<Host[]>;
   loadHosts: () => Promise<void>;
 }) {
-  const { isInTauri, hostsRef, loadHosts } = params;
+  const { isInTauri, loadHosts } = params;
   const [settings, setSettings] = useState<Settings>({});
   const [syncBusy, setSyncBusy] = useState<null | "pull" | "push" | "save">(null);
   const [syncNotice, setSyncNotice] = useState<null | { kind: "ok" | "err"; text: string }>(null);
@@ -52,22 +50,28 @@ export function useWebdavSync(params: {
 
   async function doWebdavPush() {
     if (!isInTauri) return;
-    const hostList = hostsRef.current ?? [];
-    const aliveCount = hostList.filter((h) => !h.deleted).length;
-    if (aliveCount === 0) {
-      const ok = await confirm(
-        "No hosts found.\n\nPushing now will overwrite the remote hosts.db with an empty database.\n\nContinue?",
-        { title: "WebDAV Push", kind: "warning" }
-      );
-      if (!ok) return;
-    }
-
     setSyncBusy("push");
     setSyncNotice(null);
     try {
+      // Read the authoritative database immediately before pushing. The hosts
+      // ref can belong to a settings window that was opened before another
+      // window changed the host list.
+      const hostList = await invoke<Host[]>("hosts_load");
+      if (!Array.isArray(hostList)) {
+        throw new Error("Failed to load hosts before WebDAV push.");
+      }
+
+      const aliveCount = hostList.filter((h) => !h.deleted).length;
+      if (aliveCount === 0) {
+        const ok = await confirm(
+          "No hosts found.\n\nPushing now will overwrite the remote hosts.db with an empty database.\n\nContinue?",
+          { title: "WebDAV Push", kind: "warning" }
+        );
+        if (!ok) return;
+      }
+
       await invoke("settings_save", { settings });
       await refreshSettingsFromBackend();
-      await invoke("hosts_save", { hosts: hostList });
       await invoke("webdav_push");
       setSyncNotice({ kind: "ok", text: "Pushed" });
       await message("Pushed to WebDAV.", { title: "WebDAV", kind: "info" });

@@ -105,7 +105,7 @@ function assertAllSessionResizePath() {
   );
 }
 
-function assertPtyDataQueueBackpressure() {
+function assertPtyDataQueueBatching() {
   const ptyEvents = read("src/hooks/terminal/ptyEvents.ts");
   assertMatch(
     ptyEvents,
@@ -114,8 +114,13 @@ function assertPtyDataQueueBackpressure() {
   );
   assertMatch(
     ptyEvents,
-    /PTY_DATA_BACKPRESSURE_CHARS/,
-    "PTY data queue must define a backpressure threshold"
+    /PTY_DATA_BATCH_CHARS/,
+    "PTY data queue must define a write batch limit"
+  );
+  assert.doesNotMatch(
+    ptyEvents,
+    /PTY_DATA_BACKPRESSURE_CHARS|chunks\.join\(""\)/,
+    "PTY data queue must avoid unbounded pressure-time string concatenation"
   );
   assertMatch(
     ptyEvents,
@@ -135,17 +140,16 @@ function assertPtyDataQueueBackpressure() {
   assertMatch(
     ptyEvents,
     /queuedChars/,
-    "PTY data queue must track queued characters for backpressure"
+    "PTY data queue must track queued characters for bounded draining"
   );
   assertMatch(
     ptyEvents,
     /flushPtyDataQueueImmediately/,
     "PTY exit handling must flush queued data immediately for retained failed tabs"
   );
-  assertOrdered(
+  assertMatch(
     ptyEvents,
-    "if (shouldKeepFailedTab) flushPtyDataQueueImmediately(sessionId);",
-    "if (!shouldKeepFailedTab) sessionBuffers.current.delete(sessionId);",
+    /if \(shouldKeepFailedTab\) \{\s*flushPtyDataQueueImmediately\(sessionId\);\s*\} else \{\s*sessionBuffers\.current\.delete\(sessionId\);/,
     "Failed retained tabs must flush queued output before buffer cleanup"
   );
 }
@@ -222,7 +226,7 @@ assertPackageScript();
 assertBellStyleReachesXterm();
 assertMetricsDockGatesLivePolling();
 assertAllSessionResizePath();
-assertPtyDataQueueBackpressure();
+assertPtyDataQueueBatching();
 assertTerminalSpawnTimeoutCleanup();
 assertLowRiskReviewRegressions();
 assertToastA11y();

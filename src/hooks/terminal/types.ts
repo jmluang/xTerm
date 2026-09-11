@@ -22,6 +22,7 @@ export type SessionMeta = {
   hostId: string;
   hostLabel: string;
   startedAt: number;
+  closed: boolean;
 };
 
 export type SessionTerminalHandle = {

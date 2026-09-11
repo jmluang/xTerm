@@ -67,7 +67,6 @@ export function SettingsWindowApp() {
 
   const webdav = useWebdavSync({
     isInTauri,
-    hostsRef,
     loadHosts: async () => {
       await loadHosts();
       emitToMain<SettingsHostsReloadPayload>(SETTINGS_HOSTS_RELOAD_EVENT, { reason: "webdav-pull" });

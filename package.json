@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:security": "node scripts/test_security_regressions.mjs",
     "test:frontend-regressions": "node scripts/test_frontend_regressions.mjs",
+    "test:runtime-regressions": "node --test scripts/test_review_regressions.mjs scripts/test_webdav_sync.mjs scripts/test_pty_data_queue.mjs",
     "test:updater": "node scripts/test_updater_regressions.mjs",
     "test:release-workflow": "node scripts/test_release_workflow.mjs",
     "icons": "tauri icon ../icon.png",

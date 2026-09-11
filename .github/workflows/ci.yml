@@ -39,6 +39,9 @@ jobs:
       - name: Run frontend regressions
         run: npm run test:frontend-regressions
 
+      - name: Run runtime regressions
+        run: npm run test:runtime-regressions
+
       - name: Run updater regressions
         run: |
           EXPECTED_RELEASE_VERSION="$(node -p "require('./package.json').version")" npm run test:updater

@@ -37,7 +37,7 @@ export function useTerminalSessions(params: {
   const sessionBuffers = useRef<Map<string, SessionBuffer>>(new Map());
   const sessionHadAnyOutput = useRef(new Set<string>());
   const sessionConnectTimers = useRef(new Map<string, number>());
-  const sessionMeta = useRef(new Map<string, { hostId: string; hostLabel: string; startedAt: number }>());
+  const sessionMeta = useRef(new Map<string, { hostId: string; hostLabel: string; startedAt: number; closed: boolean }>());
   const sessionConnectingCounted = useRef(new Set<string>());
   const sessionCloseReason = useRef(new Map<string, "user" | "timeout" | "unknown">());
 

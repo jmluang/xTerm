@@ -60,7 +60,6 @@ export function useAppController() {
   });
   const webdav = useWebdavSync({
     isInTauri,
-    hostsRef: hostsMgr.hostsRef,
     loadHosts: hostsMgr.loadHosts,
   });
   const hostInsights = useHostInsights({

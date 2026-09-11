@@ -49,14 +49,30 @@ function decrementConnectingHost(setConnectingHosts: SetConnectingHosts, hostId:
   });
 }
 
-async function spawnSshWithTimeout(hostId: string, cols: number, rows: number, ms: number): Promise<string> {
+function createSessionId() {
+  const randomUuid = globalThis.crypto?.randomUUID;
+  if (randomUuid) return randomUuid.call(globalThis.crypto);
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function spawnSshWithTimeout(
+  sessionId: string,
+  hostId: string,
+  cols: number,
+  rows: number,
+  ms: number
+): Promise<string> {
   let timer: number | null = null;
   let timedOut = false;
-  const spawnPromise = invoke<string>("pty_spawn_ssh", { hostId, cols, rows });
+  const spawnPromise = invoke<string>("pty_spawn_ssh", { sessionId, hostId, cols, rows });
 
   spawnPromise.then(
     (sessionId) => {
-      if (timedOut) void invoke("pty_kill", { sessionId });
+      if (timedOut) {
+        void invoke("pty_kill", { sessionId }).catch((error) => {
+          console.error("Failed to clean up late SSH session:", error);
+        });
+      }
     },
     () => {}
   );
@@ -77,7 +93,7 @@ async function spawnSshWithTimeout(hostId: string, cols: number, rows: number, m
 }
 
 export function useSessionActions(params: UseSessionActionsParams) {
-  const { isInTauri, hosts, activeSessionId, setSessions, setActiveSessionId, setConnectingHosts, terminalRefs, runtimeRefs } =
+  const { isInTauri, hosts, setSessions, setActiveSessionId, setConnectingHosts, terminalRefs, runtimeRefs } =
     params;
   const {
     sessionBuffers,
@@ -88,8 +104,25 @@ export function useSessionActions(params: UseSessionActionsParams) {
     sessionCloseReason,
   } = runtimeRefs;
 
+  function clearSessionRegistration(sessionId: string, hostId: string) {
+    if (sessionConnectingCounted.current.has(sessionId)) {
+      sessionConnectingCounted.current.delete(sessionId);
+      decrementConnectingHost(setConnectingHosts, hostId);
+    }
+    sessionMeta.current.delete(sessionId);
+    sessionHadAnyOutput.current.delete(sessionId);
+    sessionCloseReason.current.delete(sessionId);
+    const timer = sessionConnectTimers.current.get(sessionId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      sessionConnectTimers.current.delete(sessionId);
+    }
+  }
+
   async function closeSession(sessionId: string, reason: SessionCloseReason = "user") {
     sessionCloseReason.current.set(sessionId, reason);
+    const registration = sessionMeta.current.get(sessionId);
+    if (reason === "user" && registration) registration.closed = true;
     if (isInTauri) {
       try {
         await invoke("pty_kill", { sessionId });
@@ -100,24 +133,24 @@ export function useSessionActions(params: UseSessionActionsParams) {
     if (reason === "user") {
       sessionBuffers.current.delete(sessionId);
       setSessions((prev) => prev.filter((session) => session.id !== sessionId));
-      if (activeSessionId === sessionId) setActiveSessionId(null);
+      setActiveSessionId((current) => (current === sessionId ? null : current));
     }
     const meta = sessionMeta.current.get(sessionId);
     if (meta && sessionConnectingCounted.current.has(sessionId)) {
       sessionConnectingCounted.current.delete(sessionId);
       decrementConnectingHost(setConnectingHosts, meta.hostId);
     }
-    sessionMeta.current.delete(sessionId);
-    sessionConnectingCounted.current.delete(sessionId);
-    sessionHadAnyOutput.current.delete(sessionId);
     const timer = sessionConnectTimers.current.get(sessionId);
-    if (timer) {
+    if (timer !== undefined) {
       window.clearTimeout(timer);
       sessionConnectTimers.current.delete(sessionId);
     }
-    if (reason === "user") {
-      sessionCloseReason.current.delete(sessionId);
-    }
+    if (reason === "timeout") return;
+
+    sessionMeta.current.delete(sessionId);
+    sessionConnectingCounted.current.delete(sessionId);
+    sessionHadAnyOutput.current.delete(sessionId);
+    sessionCloseReason.current.delete(sessionId);
   }
 
   async function connectToHost(host: Host) {
@@ -126,6 +159,7 @@ export function useSessionActions(params: UseSessionActionsParams) {
       return;
     }
 
+    let sessionId: string | null = null;
     try {
       const startedAt = Date.now();
       setConnectingHosts((prev) => {
@@ -152,37 +186,70 @@ export function useSessionActions(params: UseSessionActionsParams) {
         return { ...prev, [host.id]: { ...current, stage: "spawn" } };
       });
 
-      const sessionId = await spawnSshWithTimeout(host.id, cols, rows, 10000);
-
-      sessionMeta.current.set(sessionId.toString(), {
+      const registeredSessionId = createSessionId();
+      sessionId = registeredSessionId;
+      const registration = {
         hostId: host.id,
         hostLabel: host.alias || host.hostname,
         startedAt,
-      });
-      sessionConnectingCounted.current.add(sessionId.toString());
-      sessionHadAnyOutput.current.delete(sessionId.toString());
+        closed: false,
+      };
+      sessionMeta.current.set(registeredSessionId, registration);
+      sessionConnectingCounted.current.add(registeredSessionId);
       setConnectingHosts((prev) => {
         const current = prev[host.id];
         if (!current) return prev;
         return { ...prev, [host.id]: { ...current, stage: "connecting" } };
       });
-      sessionCloseReason.current.delete(sessionId.toString());
-
-      const connectTimer = window.setTimeout(async () => {
-        if (sessionHadAnyOutput.current.has(sessionId.toString())) return;
-        const confirmed = await confirm(
-          `Connecting to "${host.alias || host.hostname}" is taking longer than expected.\n\nThis often means the hostname/port is wrong or blocked by a firewall.\n\nCancel this connection?`,
-          { title: "Connection Timeout", kind: "warning" }
-        );
-        if (confirmed) await closeSession(sessionId.toString(), "timeout");
-      }, 15_000);
-      sessionConnectTimers.current.set(sessionId.toString(), connectTimer);
 
       setSessions((prev) => [
         ...prev,
-        { id: sessionId.toString(), hostAlias: host.alias, hostId: host.id, startedAt, status: "starting" },
+        {
+          id: registeredSessionId,
+          hostAlias: host.alias,
+          hostId: host.id,
+          startedAt,
+          status: "starting",
+        },
       ]);
-      setActiveSessionId(sessionId.toString());
+      setActiveSessionId(registeredSessionId);
+
+      const returnedSessionId = await spawnSshWithTimeout(registeredSessionId, host.id, cols, rows, 10000);
+      if (returnedSessionId !== registeredSessionId) {
+        void invoke("pty_kill", { sessionId: returnedSessionId }).catch((killError) => {
+          console.error("Failed to clean up mismatched SSH session:", killError);
+        });
+        throw new Error("PTY spawn returned a different session ID");
+      }
+      if (registration.closed) {
+        void invoke("pty_kill", { sessionId: returnedSessionId }).catch((killError) => {
+          console.error("Failed to clean up SSH session closed during spawn:", killError);
+        });
+        return;
+      }
+      if (!sessionMeta.current.has(registeredSessionId)) {
+        return;
+      }
+
+      setConnectingHosts((prev) => {
+        const current = prev[host.id];
+        if (!current) return prev;
+        return { ...prev, [host.id]: { ...current, stage: "connecting" } };
+      });
+      sessionCloseReason.current.delete(registeredSessionId);
+
+      if (!sessionHadAnyOutput.current.has(registeredSessionId)) {
+        const connectTimer = window.setTimeout(async () => {
+          if (sessionHadAnyOutput.current.has(registeredSessionId)) return;
+          const confirmed = await confirm(
+            `Connecting to "${host.alias || host.hostname}" is taking longer than expected.\n\nThis often means the hostname/port is wrong or blocked by a firewall.\n\nCancel this connection?`,
+            { title: "Connection Timeout", kind: "warning" }
+          );
+          if (confirmed) await closeSession(registeredSessionId, "timeout");
+        }, 15_000);
+        sessionConnectTimers.current.set(registeredSessionId, connectTimer);
+      }
+
       requestAnimationFrame(() => {
         try {
           terminalRefs.terminalInstance.current?.focus();
@@ -191,7 +258,14 @@ export function useSessionActions(params: UseSessionActionsParams) {
         }
       });
     } catch (error) {
-      decrementConnectingHost(setConnectingHosts, host.id);
+      if (sessionId) {
+        clearSessionRegistration(sessionId, host.id);
+        sessionBuffers.current.delete(sessionId);
+        setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+        setActiveSessionId((current) => (current === sessionId ? null : current));
+      } else {
+        decrementConnectingHost(setConnectingHosts, host.id);
+      }
       console.error("Failed to connect:", error);
       alert(`Failed to connect: ${error}`);
     }
