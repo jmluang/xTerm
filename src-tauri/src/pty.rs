@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     ffi::OsString,
     io::{Read, Write},
+    path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -313,6 +314,7 @@ fn maybe_send_auto_password(session: &Arc<Session>, data: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_pty_command<R: Runtime>(
     session_id: String,
     file: String,
@@ -323,6 +325,7 @@ async fn spawn_pty_command<R: Runtime>(
     env: BTreeMap<String, String>,
     encoding: Option<String>,
     auto_password: Option<AutoPasswordState>,
+    connection_id: Option<String>,
     app: AppHandle<R>,
     state: tauri::State<'_, PtyState>,
 ) -> Result<String, String> {
@@ -386,6 +389,7 @@ async fn spawn_pty_command<R: Runtime>(
     // Reader thread: blocks on PTY read, decodes, and hands chunks to the
     // emitter thread. Kept separate so slow event emission never stalls reads.
     let id_data = id.clone();
+    let conn_buffer = connection_id.clone();
     let session_for_reader = session.clone();
     let mut output_decoder = PtyOutputDecoder::new(encoding.as_deref());
     let (chunk_tx, chunk_rx) = mpsc::channel::<String>();
@@ -399,6 +403,19 @@ async fn spawn_pty_command<R: Runtime>(
                     pending.extend_from_slice(&buf[..n]);
                     for data in extract_ready_output_chunks(&mut output_decoder, &mut pending) {
                         maybe_send_auto_password(&session_for_reader, &data);
+                        // MCP observation branch (phase A): bounded, never
+                        // blocks the human terminal path. Wrapped in a
+                        // catch-all guard so a broken MCP layer can never
+                        // take the terminal down with it.
+                        let conn_for_branch = conn_buffer.clone();
+                        let data_for_branch = data.clone();
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if let (Some(service), Some(conn_id)) =
+                                (crate::mcp_service(), conn_for_branch)
+                            {
+                                service.buffers.push(&conn_id, data_for_branch);
+                            }
+                        }));
                         if chunk_tx.send(data).is_err() {
                             return;
                         }
@@ -409,6 +426,12 @@ async fn spawn_pty_command<R: Runtime>(
         }
 
         if let Some(data) = drain_output_tail(&mut output_decoder, &mut pending) {
+            let conn_for_branch = conn_buffer.clone();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let (Some(service), Some(conn_id)) = (crate::mcp_service(), conn_for_branch) {
+                    service.buffers.push(&conn_id, data.clone());
+                }
+            }));
             let _ = chunk_tx.send(data);
         }
     });
@@ -446,6 +469,13 @@ async fn spawn_pty_command<R: Runtime>(
         let code = child.wait().ok().map(|s| s.exit_code()).unwrap_or(1);
         let _ = reader_handle.join();
         let _ = emitter_handle.join();
+        // Phase A lifecycle: mark the backend record exited first (grants and
+        // derived channels stop being valid) before the UI sees the exit.
+        if let Some(service) = crate::mcp_service() {
+            if let Some(record) = service.registry.mark_exited_by_session(&id_exit, code) {
+                service.on_connection_closed(&record.connection_id);
+            }
+        }
         let _ = app_exit.emit_to(
             MAIN_WINDOW_LABEL,
             "pty:exit",
@@ -497,6 +527,39 @@ pub async fn pty_spawn_ssh<R: Runtime>(
         "-o".to_string(),
         "ConnectionAttempts=1".to_string(),
     ];
+
+    // Phase A: register the connection with a backend-generated identity and
+    // attach a managed mux entry so MCP phases B/C can only ever reuse this
+    // authenticated connection. If mux preparation fails the connection still
+    // proceeds — it is simply never MCP-eligible ("reconnect to enable MCP").
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let mut mux_socket: Option<PathBuf> = None;
+    if let Some(service) = crate::mcp_service() {
+        match service.mux.prepare_socket() {
+            Ok(socket) => {
+                args.extend(service.mux.master_args(&socket));
+                mux_socket = Some(socket);
+            }
+            Err(error) => {
+                eprintln!("[pty] mux setup failed; connection will not be MCP-eligible: {error}");
+            }
+        }
+        let snapshot = crate::connection_registry::HostSnapshot::from_host(&host);
+        if let Err(error) = service.registry.register(
+            connection_id.clone(),
+            session_id.clone(),
+            snapshot,
+            mux_socket.clone(),
+        ) {
+            return Err(format!("connection registration failed: {error}"));
+        }
+        if let Some(socket) = mux_socket.clone() {
+            service.mux.track(&connection_id, socket);
+            service
+                .mux
+                .spawn_readiness_probe(Arc::clone(&service.registry), connection_id.clone());
+        }
+    }
     let env = parse_env_vars(host.env_vars.as_deref())?;
     for (key, value) in env.iter() {
         args.extend(["-o".to_string(), format!("SetEnv={key}={value}")]);
@@ -527,6 +590,7 @@ pub async fn pty_spawn_ssh<R: Runtime>(
         env,
         host.encoding.clone(),
         auto_password_state,
+        mux_socket.map(|_| connection_id),
         app,
         state,
     )
@@ -592,6 +656,13 @@ pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> 
             .cloned()
             .ok_or("Unavailable session")?
     };
+    // Phase A lifecycle: moving to Closing first stops new grants/derived
+    // channels before the child is killed and before output tail cleanup.
+    if let Some(service) = crate::mcp_service() {
+        if let Some(record) = service.registry.begin_close_by_session(&session_id) {
+            service.on_connection_closed(&record.connection_id);
+        }
+    }
     let mut k = session.killer.lock().map_err(|_| "killer poisoned")?;
     k.kill().map_err(|e| e.to_string())?;
     Ok(())

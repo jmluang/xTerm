@@ -3,6 +3,7 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::init_mcp_service();
     let builder = tauri::Builder::default()
         .manage(PtyState::default())
         .setup(|app| {
@@ -51,6 +52,15 @@ pub fn run() {
             crate::pty::pty_write,
             crate::pty::pty_resize,
             crate::pty::pty_kill,
+            crate::mcp::commands::mcp_pair_client,
+            crate::mcp::commands::mcp_list_clients,
+            crate::mcp::commands::mcp_unpair_client,
+            crate::mcp::commands::mcp_list_connections,
+            crate::mcp::commands::mcp_grant_connection,
+            crate::mcp::commands::mcp_revoke_connection,
+            crate::mcp::commands::mcp_pending_tasks,
+            crate::mcp::commands::mcp_approve_task,
+            crate::mcp::commands::mcp_reject_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

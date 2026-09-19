@@ -1,0 +1,211 @@
+- generic [ref=e2]:
+  - region
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - link "Homepage" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+        - generic [ref=e13]:
+          - navigation "Global" [ref=e16]:
+            - list [ref=e17]:
+              - listitem [ref=e18]:
+                - button "Platform" [ref=e20] [cursor=pointer]:
+                  - text: Platform
+                  - img [ref=e21]
+              - listitem [ref=e23]:
+                - button "Solutions" [ref=e25] [cursor=pointer]:
+                  - text: Solutions
+                  - img [ref=e26]
+              - listitem [ref=e28]:
+                - button "Resources" [ref=e30] [cursor=pointer]:
+                  - text: Resources
+                  - img [ref=e31]
+              - listitem [ref=e33]:
+                - button "Open Source" [ref=e35] [cursor=pointer]:
+                  - text: Open Source
+                  - img [ref=e36]
+              - listitem [ref=e38]:
+                - button "Enterprise" [ref=e40] [cursor=pointer]:
+                  - text: Enterprise
+                  - img [ref=e41]
+              - listitem [ref=e43]:
+                - link "Pricing" [ref=e44] [cursor=pointer]:
+                  - /url: https://github.com/pricing
+                  - generic [ref=e45]: Pricing
+          - generic [ref=e46]:
+            - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+            - link "Sign in" [ref=e54] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fjmluang%2FxTerm%2Freleases%2Ftag%2Fv0.1.0-updater-test.1
+            - link "Sign up" [ref=e55] [cursor=pointer]:
+              - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E%2Freleases%2Fshow&source=header-repo&source_repo=jmluang%2FxTerm
+            - button "Appearance settings" [ref=e58] [cursor=pointer]:
+              - img
+  - main [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e66]:
+          - img [ref=e67]
+          - link "jmluang" [ref=e70] [cursor=pointer]:
+            - /url: /jmluang
+          - generic [ref=e71]: /
+          - strong [ref=e72]:
+            - link "xTerm" [ref=e73] [cursor=pointer]:
+              - /url: /jmluang/xTerm
+          - generic [ref=e74]: Public
+        - generic [ref=e75]:
+          - list:
+            - listitem [ref=e76]:
+              - link "You must be signed in to change notification settings" [ref=e77] [cursor=pointer]:
+                - /url: /login?return_to=%2Fjmluang%2FxTerm
+                - img [ref=e78]
+                - text: Notifications
+            - listitem [ref=e80]:
+              - link "Fork 0" [ref=e81] [cursor=pointer]:
+                - /url: /login?return_to=%2Fjmluang%2FxTerm
+                - img [ref=e82]
+                - text: Fork
+                - generic "0" [ref=e84]
+            - listitem [ref=e85]:
+              - link "You must be signed in to star a repository" [ref=e87] [cursor=pointer]:
+                - /url: /login?return_to=%2Fjmluang%2FxTerm
+                - img [ref=e88]
+                - text: Star
+                - generic "0 users starred this repository" [ref=e90]: "0"
+      - navigation "Repository" [ref=e91]:
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Code" [ref=e94] [cursor=pointer]:
+              - /url: /jmluang/xTerm/tree/v0.1.0-updater-test.1
+              - img [ref=e95]
+              - generic [ref=e97]: Code
+          - listitem [ref=e98]:
+            - link "Issues" [ref=e99] [cursor=pointer]:
+              - /url: /jmluang/xTerm/issues
+              - img [ref=e100]
+              - generic [ref=e103]: Issues
+          - listitem [ref=e104]:
+            - link "Pull requests" [ref=e105] [cursor=pointer]:
+              - /url: /jmluang/xTerm/pulls
+              - img [ref=e106]
+              - generic [ref=e108]: Pull requests
+          - listitem [ref=e109]:
+            - link "Actions" [ref=e110] [cursor=pointer]:
+              - /url: /jmluang/xTerm/actions
+              - img [ref=e111]
+              - generic [ref=e113]: Actions
+          - listitem [ref=e114]:
+            - link "Projects" [ref=e115] [cursor=pointer]:
+              - /url: /jmluang/xTerm/projects
+              - img [ref=e116]
+              - generic [ref=e118]: Projects
+          - listitem [ref=e119]:
+            - link "Security and quality" [ref=e120] [cursor=pointer]:
+              - /url: /jmluang/xTerm/security
+              - img [ref=e121]
+              - generic [ref=e123]: Security and quality
+          - listitem [ref=e124]:
+            - link "Insights" [ref=e125] [cursor=pointer]:
+              - /url: /jmluang/xTerm/pulse
+              - img [ref=e126]
+              - generic [ref=e128]: Insights
+    - generic [ref=e131]:
+      - generic [ref=e132]:
+        - navigation "Releases and Tags":
+          - link "Releases" [ref=e133] [cursor=pointer]:
+            - /url: /jmluang/xTerm/releases
+          - link "Tags" [ref=e134] [cursor=pointer]:
+            - /url: /jmluang/xTerm/tags
+      - generic [ref=e135]:
+        - heading "v0.1.0-updater-test.1" [level=1] [ref=e136]
+        - generic [ref=e137]:
+          - list [ref=e139]:
+            - listitem [ref=e140]:
+              - link "v0.1.0-updater-test.1" [ref=e143] [cursor=pointer]:
+                - /url: /jmluang/xTerm/tree/v0.1.0-updater-test.1
+                - img [ref=e144]
+                - text: v0.1.0-updater-test.1
+            - listitem [ref=e146]:
+              - link "84648ea" [ref=e147] [cursor=pointer]:
+                - /url: /jmluang/xTerm/commit/84648eaa4d3a8d978839eef3c535bcb537a388c6
+                - img [ref=e148]
+                - code [ref=e150]: 84648ea
+            - listitem
+            - listitem [ref=e151]:
+              - button "Compare" [ref=e154] [cursor=pointer]:
+                - generic [ref=e155]:
+                  - generic [ref=e156]: Compare
+                  - generic:
+                    - img
+          - generic [ref=e157]:
+            - generic [ref=e158]:
+              - link "v0.1.0-updater-test.1" [ref=e161] [cursor=pointer]:
+                - /url: /jmluang/xTerm/releases/tag/v0.1.0-updater-test.1
+              - generic [ref=e164]:
+                - img "@jmluang" [ref=e165]
+                - link "jmluang" [ref=e166] [cursor=pointer]:
+                  - /url: /jmluang
+                - text: tagged this 19 Apr 15:20 23 minutes ago
+            - generic [ref=e168]: "ci: recheck release state before publish"
+            - group [ref=e171]:
+              - button "Assets 2" [expanded] [ref=e172] [cursor=pointer]:
+                - generic [ref=e173]:
+                  - generic [ref=e174]: Assets
+                  - generic "2" [ref=e175]
+              - list [ref=e178]:
+                - listitem [ref=e179]:
+                  - generic [ref=e180]:
+                    - img [ref=e181]
+                    - link "Source code (zip)" [ref=e183] [cursor=pointer]:
+                      - /url: /jmluang/xTerm/archive/refs/tags/v0.1.0-updater-test.1.zip
+                      - generic [ref=e184]: Source code
+                      - generic [ref=e185]: (zip)
+                  - generic [ref=e187]: 2026-04-19T15:20:02Z23 minutes ago
+                - listitem [ref=e188]:
+                  - generic [ref=e189]:
+                    - img [ref=e190]
+                    - link "Source code (tar.gz)" [ref=e192] [cursor=pointer]:
+                      - /url: /jmluang/xTerm/archive/refs/tags/v0.1.0-updater-test.1.tar.gz
+                      - generic [ref=e193]: Source code
+                      - generic [ref=e194]: (tar.gz)
+                  - generic [ref=e196]: 2026-04-19T15:20:02Z23 minutes ago
+  - contentinfo [ref=e197]:
+    - heading "Footer" [level=2] [ref=e198]
+    - generic [ref=e199]:
+      - generic [ref=e200]:
+        - link "GitHub Homepage" [ref=e201] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e202]
+        - generic [ref=e204]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e205]:
+        - heading "Footer navigation" [level=3] [ref=e206]
+        - list "Footer navigation" [ref=e207]:
+          - listitem [ref=e208]:
+            - link "Terms" [ref=e209] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e210]:
+            - link "Privacy" [ref=e211] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e212]:
+            - link "Security" [ref=e213] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e214]:
+            - link "Status" [ref=e215] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e216]:
+            - link "Community" [ref=e217] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e218]:
+            - link "Docs" [ref=e219] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e220]:
+            - link "Contact" [ref=e221] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e222]:
+            - button "Manage cookies" [ref=e224] [cursor=pointer]
+          - listitem [ref=e225]:
+            - button "Do not share my personal information" [ref=e227] [cursor=pointer]

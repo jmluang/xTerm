@@ -1,4 +1,4 @@
-export type SettingsSection = "terminal" | "sync" | "import" | "about";
+export type SettingsSection = "terminal" | "sync" | "import" | "mcp" | "about";
 
 export type UpdaterStatus =
   | "idle"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { ChevronDown, Minus, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { McpPanel } from "@/components/mcp/McpPanel";
 import { resolveWebdavHostsDbUrl } from "@/lib/webdav";
 import { getTerminalTheme, TERMINAL_THEME_OPTIONS, type TerminalThemeId } from "@/lib/terminalTheme";
 import {
@@ -239,6 +240,7 @@ export function SettingsPanel(props: {
                   { id: "terminal", label: "Terminal" },
                   { id: "sync", label: "Sync" },
                   { id: "import", label: "Import SSH Config" },
+                  { id: "mcp", label: "MCP (Beta)" },
                   { id: "about", label: "About" },
                 ].map((section) => (
                   <button
@@ -761,6 +763,8 @@ export function SettingsPanel(props: {
                 )}
               </div>
             ) : null}
+
+            {activeSection === "mcp" ? <McpPanel /> : null}
 
             {activeSection === "about" ? (
               <div className="mx-auto max-w-4xl grid gap-4">
