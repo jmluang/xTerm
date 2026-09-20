@@ -211,6 +211,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # The MCP bridge ships as a signed sidecar next to the app binary
+      # (tauri.conf.json bundle.externalBin). Stage it for this matrix target
+      # before tauri-action bundles; tauri build's beforeBuildCommand also
+      # calls `npm run build:bridge` and honors XTERM_BRIDGE_TARGET.
+      - name: Stage MCP bridge sidecar
+        if: steps.inspect_release.outputs.assets_complete != 'true'
+        env:
+          XTERM_BRIDGE_TARGET: ${{ matrix.target }}
+        run: node scripts/build_bridge_sidecar.mjs
+
       - name: Install frontend deps
         if: steps.inspect_release.outputs.assets_complete != 'true'
         run: npm ci

@@ -29,3 +29,6 @@ docs/superpowers/*
 !docs/superpowers/specs/
 !docs/superpowers/specs/*.md
 AGENTS.md
+
+# Staged Tauri sidecar binaries (built by scripts/build_bridge_sidecar.mjs)
+src-tauri/xtermius-mcp-bridge-*

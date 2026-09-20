@@ -14,6 +14,7 @@
     "test:release-workflow": "node scripts/test_release_workflow.mjs",
     "icons": "tauri icon ../icon.png",
     "tauri": "tauri",
+    "build:bridge": "node scripts/build_bridge_sidecar.mjs",
     "bench:startup": "./scripts/bench_startup.sh"
   },
   "dependencies": {
