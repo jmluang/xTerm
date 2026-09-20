@@ -455,8 +455,10 @@ impl TaskEngine {
                     tasks.get(task_id).map(|task| {
                         let out = &task.output;
                         out.contains("mux_client")
-                            || out.contains("Control socket connect")
-                            || out.contains("control socket connect")
+                            || out.contains("Control socket")
+                            || out.contains("control socket")
+                            || out.contains("proxy command")
+                            || out.contains("kex_exchange_identification")
                     })
                 })
                 .unwrap_or(false);

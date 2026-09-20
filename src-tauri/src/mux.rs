@@ -45,9 +45,13 @@ pub struct MuxManager {
 impl MuxManager {
     pub fn new() -> Result<Self, String> {
         let ssh_config = crate::ssh_config::get_ssh_config_path();
-        let dir = ssh_config
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
+        // The app config dir on macOS contains a space ("Application
+        // Support"), which ssh's config parser cannot accept in an unquoted
+        // ControlPath, and it also runs long. Use a short private dir under
+        // the home directory instead.
+        let dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".xtermius")
             .join("mux");
         Self::init_dir(&dir)?;
         let manager = Self {
@@ -121,7 +125,7 @@ impl MuxManager {
             "-o".to_string(),
             "ControlPersist=no".to_string(),
             "-o".to_string(),
-            format!("ControlPath={}", socket.to_string_lossy()),
+            control_path_option(socket),
         ]
     }
 
@@ -287,9 +291,19 @@ impl MuxManager {
             "-o".to_string(),
             "ControlMaster=no".to_string(),
             "-o".to_string(),
-            format!("ControlPath={}", socket.to_string_lossy()),
+            control_path_option(socket),
             "-o".to_string(),
             "BatchMode=yes".to_string(),
+            // Fail-closed guard verified against OpenSSH 9.9 (see docs/MCP.md):
+            // with ControlMaster=no, a missing/stale mux socket makes ssh fall
+            // back to a *direct* connection and re-authenticate (BatchMode does
+            // not stop key auth). ProxyCommand is never used on the mux path,
+            // so a failing proxy turns the fallback into a hard failure while
+            // leaving a live master fully usable. `-o` also overrides any
+            // ProxyJump/ProxyCommand in the host config for this one-shot
+            // command channel only.
+            "-o".to_string(),
+            "ProxyCommand=exec false".to_string(),
             "-o".to_string(),
             "NumberOfPasswordPrompts=0".to_string(),
             "-o".to_string(),
@@ -297,7 +311,10 @@ impl MuxManager {
             target.to_string(),
             "sh".to_string(),
             "-lc".to_string(),
-            command.to_string(),
+            // ssh joins command argv with spaces and hands the result to the
+            // remote login shell, so a multi-word script must be one quoted
+            // shell word or it gets torn apart at the first space/semicolon.
+            shell_quote_single(command),
         ]
     }
 
@@ -345,6 +362,30 @@ pub struct MuxCommandResult {
     pub stderr: String,
 }
 
+/// Shell-quote a string as a single word for the remote shell: ssh joins
+/// command argv with spaces before the remote shell parses it, so a
+/// multi-word script must be wrapped (and internal quotes escaped).
+fn shell_quote_single(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\u{27}');
+    for ch in value.chars() {
+        if ch == '\u{27}' {
+            out.push('\u{27}');
+            out.push('\u{5c}');
+        }
+        out.push(ch);
+    }
+    out.push('\u{27}');
+    out
+}
+
+/// `ControlPath` is parsed as an ssh_config keyword, so a value containing
+/// spaces (e.g. a home directory like "Application Support") must be quoted.
+/// Quoting unconditionally is always valid: ssh strips the quotes.
+fn control_path_option(socket: &Path) -> String {
+    format!("ControlPath=\"{}\"", socket.to_string_lossy())
+}
+
 /// Turn raw output from a derived-channel ssh invocation into either a
 /// legitimate command result or a fail-closed mux error.
 #[allow(dead_code)] // retained as phase B/C integration surface
@@ -379,6 +420,11 @@ fn is_mux_failure(output: &std::process::Output, stderr: &str) -> bool {
         "No such file or directory",
         "Connection refused",
         "Permission denied",
+        // Direct-connection fallback attempts (must fail closed):
+        "kex_exchange_identification",
+        "Connection closed by UNKNOWN",
+        "ssh_proxyconnect",
+        "proxy command",
     ];
     let stderr = stderr.trim();
     !stderr.is_empty() && needles.iter().any(|needle| stderr.contains(needle))
@@ -489,7 +535,7 @@ mod tests {
         let args = manager.master_args(Path::new("/tmp/s"));
         assert!(args.iter().any(|a| a == "ControlMaster=yes"));
         assert!(args.iter().any(|a| a == "ControlPersist=no"));
-        assert!(args.iter().any(|a| a == "ControlPath=/tmp/s"));
+        assert!(args.iter().any(|a| a == "ControlPath=\"/tmp/s\""));
         assert!(!args.iter().any(|a| a.contains("auto")));
     }
 
@@ -500,10 +546,11 @@ mod tests {
         // Never creates a master, never authenticates, only the managed path.
         assert!(args.iter().any(|a| a == "ControlMaster=no"));
         assert!(args.iter().any(|a| a == "BatchMode=yes"));
+        assert!(args.iter().any(|a| a == "ProxyCommand=exec false"));
         assert!(args.iter().any(|a| a == "NumberOfPasswordPrompts=0"));
-        assert!(args.iter().any(|a| a == "ControlPath=/tmp/s"));
+        assert!(args.iter().any(|a| a == "ControlPath=\"/tmp/s\""));
         assert!(args.iter().any(|a| a == "-T"));
-        assert_eq!(args.last().map(String::as_str), Some("uptime"));
+        assert_eq!(args.last().map(String::as_str), Some("'uptime'"));
     }
 
     #[test]
