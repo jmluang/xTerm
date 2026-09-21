@@ -29,11 +29,18 @@ pub struct McpService {
 }
 
 impl McpService {
+    /// In-memory auth (tests). The app uses `with_auth` +
+    /// `AuthState::open_default` so pairings survive restarts.
+    #[cfg(test)]
     pub fn new(mux: Arc<MuxManager>) -> Self {
+        Self::with_auth(mux, AuthState::default())
+    }
+
+    pub fn with_auth(mux: Arc<MuxManager>, auth: AuthState) -> Self {
         Self {
             registry: Arc::new(ConnectionRegistry::default()),
             buffers: Arc::new(OutputBuffers::default()),
-            auth: Arc::new(AuthState::default()),
+            auth: Arc::new(auth),
             tasks: Arc::new(TaskEngine::default()),
             mux,
         }

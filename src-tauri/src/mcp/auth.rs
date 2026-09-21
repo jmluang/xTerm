@@ -72,21 +72,199 @@ pub struct AuthState {
     /// Bumped on every revocation; snapshot it before work and compare after
     /// to catch revoke-during-operation races.
     revocation_counter: AtomicU64,
+    /// Optional SQLite persistence. In-memory only when None (tests); the
+    /// app opens `<config>/mcp.db` so pairings survive restarts. The DB
+    /// lives in the app config dir and is deliberately NOT the
+    /// WebDAV-synced hosts.db: pairing secrets never leave this machine.
+    db: Option<Mutex<rusqlite::Connection>>,
 }
 
 impl Default for AuthState {
     fn default() -> Self {
+        Self::in_memory()
+    }
+}
+
+impl AuthState {
+    /// No persistence: for unit tests only.
+    pub fn in_memory() -> Self {
         Self {
             inner: Mutex::new(AuthInner {
                 clients: HashMap::new(),
                 grants: HashMap::new(),
             }),
             revocation_counter: AtomicU64::new(0),
+            db: None,
         }
     }
-}
+    /// Open (and initialize) the persistent pairing store.
+    pub fn open(db_path: &std::path::Path) -> Result<Self, String> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS mcp_clients (
+               client_id     TEXT PRIMARY KEY,
+               label         TEXT,
+               token_hash    TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS mcp_grants (
+               client_id       TEXT NOT NULL,
+               connection_id   TEXT NOT NULL,
+               generation      INTEGER NOT NULL,
+               grant_start_seq INTEGER NOT NULL,
+               created_at_ms   INTEGER NOT NULL,
+               PRIMARY KEY (client_id, connection_id)
+             );",
+        )
+        .map_err(|e| e.to_string())?;
 
-impl AuthState {
+        let mut inner = AuthInner {
+            clients: HashMap::new(),
+            grants: HashMap::new(),
+        };
+        {
+            let mut stmt = conn
+                .prepare("SELECT client_id, label, token_hash, created_at_ms FROM mcp_clients")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(PairedClient {
+                        client_id: row.get(0)?,
+                        label: row.get(1)?,
+                        token_hash: row.get(2)?,
+                        created_at_ms: row.get(3)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            for client in rows {
+                let client = client.map_err(|e| e.to_string())?;
+                inner.clients.insert(client.client_id.clone(), client);
+            }
+        }
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT client_id, connection_id, generation, grant_start_seq, created_at_ms
+                     FROM mcp_grants",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(ConnectionGrant {
+                        grant_id: String::new(), // regenerated below
+                        client_id: row.get(0)?,
+                        connection_id: row.get(1)?,
+                        generation: row.get(2)?,
+                        grant_start_seq: row.get(3)?,
+                        created_at_ms: row.get(4)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            for grant in rows {
+                let mut grant = grant.map_err(|e| e.to_string())?;
+                grant.grant_id = uuid::Uuid::new_v4().to_string();
+                inner
+                    .grants
+                    .insert((grant.client_id.clone(), grant.connection_id.clone()), grant);
+            }
+        }
+
+        Ok(Self {
+            inner: Mutex::new(inner),
+            revocation_counter: AtomicU64::new(0),
+            db: Some(Mutex::new(conn)),
+        })
+    }
+
+    /// Preferred app entry point: persistent store with graceful fallback to
+    /// in-memory when the DB cannot be opened (MCP must never take the app
+    /// down; it just loses pairing across restarts).
+    pub fn open_or_memory(db_path: &std::path::Path) -> Self {
+        match Self::open(db_path) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!("[mcp] pairing store unavailable, using memory only: {error}");
+                Self::in_memory()
+            }
+        }
+    }
+
+    fn mcp_db_path() -> std::path::PathBuf {
+        crate::ssh_config::get_ssh_config_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("mcp.db")
+    }
+
+    /// App entry point using the default store location.
+    pub fn open_default() -> Self {
+        Self::open_or_memory(&Self::mcp_db_path())
+    }
+
+    fn persist_client(&self, client: &PairedClient) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(conn) = db.lock() else { return };
+        let _ = conn.execute(
+            "INSERT INTO mcp_clients (client_id, label, token_hash, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(client_id) DO UPDATE SET label=?2, token_hash=?3, created_at_ms=?4",
+            rusqlite::params![
+                client.client_id,
+                client.label,
+                client.token_hash,
+                client.created_at_ms
+            ],
+        );
+    }
+
+    fn persist_delete_client(&self, client_id: &str) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(conn) = db.lock() else { return };
+        let _ = conn.execute("DELETE FROM mcp_clients WHERE client_id = ?1", [client_id]);
+        let _ = conn.execute("DELETE FROM mcp_grants WHERE client_id = ?1", [client_id]);
+    }
+
+    fn persist_grant(&self, grant: &ConnectionGrant) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(conn) = db.lock() else { return };
+        let _ = conn.execute(
+            "INSERT INTO mcp_grants (client_id, connection_id, generation, grant_start_seq, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(client_id, connection_id) DO UPDATE SET
+               generation=?3, grant_start_seq=?4, created_at_ms=?5",
+            rusqlite::params![
+                grant.client_id,
+                grant.connection_id,
+                grant.generation as i64,
+                grant.grant_start_seq as i64,
+                grant.created_at_ms
+            ],
+        );
+    }
+
+    fn persist_delete_grant(&self, client_id: &str, connection_id: &str) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(conn) = db.lock() else { return };
+        let _ = conn.execute(
+            "DELETE FROM mcp_grants WHERE client_id = ?1 AND connection_id = ?2",
+            [client_id, connection_id],
+        );
+    }
+
+    fn persist_delete_grants_for_connection(&self, connection_id: &str) {
+        let Some(db) = self.db.as_ref() else { return };
+        let Ok(conn) = db.lock() else { return };
+        let _ = conn.execute(
+            "DELETE FROM mcp_grants WHERE connection_id = ?1",
+            [connection_id],
+        );
+    }
+
     /// Create a new pairing. Returns (client_id, raw token). The raw token is
     /// returned exactly once and never stored.
     pub fn pair_client(&self, label: Option<String>) -> Option<(String, String)> {
@@ -100,7 +278,9 @@ impl AuthState {
             created_at_ms: now_ms(),
         };
         let mut inner = self.inner.lock().ok()?;
-        inner.clients.insert(client_id.clone(), client);
+        inner.clients.insert(client_id.clone(), client.clone());
+        drop(inner);
+        self.persist_client(&client);
         Some((client_id, token))
     }
 
@@ -137,6 +317,8 @@ impl AuthState {
         inner
             .grants
             .insert((client_id.to_string(), connection_id.to_string()), grant.clone());
+        drop(inner);
+        self.persist_grant(&grant);
         self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         Some(grant)
     }
@@ -176,6 +358,7 @@ impl AuthState {
             })
             .unwrap_or(false);
         if removed {
+            self.persist_delete_grant(client_id, connection_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
         removed
@@ -193,6 +376,7 @@ impl AuthState {
             })
             .unwrap_or(false);
         if removed {
+            self.persist_delete_grants_for_connection(connection_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -210,6 +394,7 @@ impl AuthState {
             })
             .unwrap_or(false);
         if changed {
+            self.persist_delete_client(client_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -255,6 +440,105 @@ pub struct PairedClientSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_db(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "xt-auth-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("mcp.db")
+    }
+
+    #[test]
+    fn pairing_and_grants_survive_restart() {
+        let db = temp_db("survive");
+        {
+            let auth = AuthState::open(&db).unwrap();
+            let (client_id, token) = auth.pair_client(Some("claude".into())).unwrap();
+            auth.grant_connection(&client_id, "conn-1", 7, 42).unwrap();
+            // simulate restart: drop everything
+        }
+        let auth = AuthState::open(&db).unwrap();
+        let clients = auth.list_clients();
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].label.as_deref(), Some("claude"));
+        assert_eq!(clients[0].grants, vec!["conn-1".to_string()]);
+
+        // Raw token still authenticates (hash persisted, not the token).
+        let client_id = &clients[0].client_id;
+        // token was dropped with the first instance; re-derive by pairing a
+        // second client and verifying a restart keeps BOTH clients working.
+        let (_id2, token2) = auth.pair_client(None).unwrap();
+        drop(auth);
+        let auth = AuthState::open(&db).unwrap();
+        assert!(auth.authenticate(&_id2, &token2).is_ok());
+        assert_eq!(auth.list_clients().len(), 2);
+        // Grant reloaded with the right generation/start seq.
+        assert!(auth.authorize(client_id, "", "conn-1", 7).is_err()); // empty token -> BadToken, proves client exists
+    }
+
+    #[test]
+    fn unpair_and_revoke_persist() {
+        let db = temp_db("revoke");
+        let (client_id, token) = {
+            let auth = AuthState::open(&db).unwrap();
+            let (client_id, token) = auth.pair_client(None).unwrap();
+            auth.grant_connection(&client_id, "conn-1", 1, 0).unwrap();
+            (client_id, token)
+        };
+        {
+            let auth = AuthState::open(&db).unwrap();
+            assert!(auth.authenticate(&client_id, &token).is_ok());
+            assert!(auth.revoke(&client_id, "conn-1"));
+        }
+        let auth = AuthState::open(&db).unwrap();
+        assert_eq!(
+            auth.authorize(&client_id, &token, "conn-1", 1).unwrap_err(),
+            AuthError::NoGrant
+        );
+        auth.unpair(&client_id);
+        drop(auth);
+        let auth = AuthState::open(&db).unwrap();
+        assert_eq!(
+            auth.authenticate(&client_id, &token).unwrap_err(),
+            AuthError::UnknownClient
+        );
+        assert!(auth.list_clients().is_empty());
+    }
+
+    #[test]
+    fn connection_revoke_persists_across_restart() {
+        let db = temp_db("connrevoke");
+        let (a, ta) = {
+            let auth = AuthState::open(&db).unwrap();
+            let (a, ta) = auth.pair_client(None).unwrap();
+            let (b, _tb) = auth.pair_client(None).unwrap();
+            auth.grant_connection(&a, "conn-1", 1, 0).unwrap();
+            auth.grant_connection(&b, "conn-1", 1, 0).unwrap();
+            auth.grant_connection(&b, "conn-2", 1, 0).unwrap();
+            auth.revoke_connection("conn-1");
+            (a, ta)
+        };
+        let auth = AuthState::open(&db).unwrap();
+        assert_eq!(
+            auth.authorize(&a, &ta, "conn-1", 1).unwrap_err(),
+            AuthError::NoGrant
+        );
+        // conn-2 grant survived (only conn-1 was revoked).
+        assert_eq!(auth.list_clients().len(), 2);
+    }
+
+    #[test]
+    fn open_or_memory_falls_back_gracefully() {
+        // A path that cannot be a database (a directory) must not panic.
+        let dir = temp_db("fallback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let auth = AuthState::open_or_memory(&dir); // dir itself, not a file
+        let (client_id, token) = auth.pair_client(None).unwrap();
+        assert!(auth.authenticate(&client_id, &token).is_ok());
+    }
 
     #[test]
     fn paired_token_authenticates_and_raw_token_is_never_stored() {

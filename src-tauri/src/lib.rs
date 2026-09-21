@@ -28,7 +28,8 @@ pub(crate) fn mcp_service() -> Option<Arc<mcp::service::McpService>> {
 fn init_mcp_service() {
     match mux::MuxManager::new() {
         Ok(mux) => {
-            let service = Arc::new(mcp::service::McpService::new(Arc::new(mux)));
+            let auth = mcp::auth::AuthState::open_default();
+            let service = Arc::new(mcp::service::McpService::with_auth(Arc::new(mux), auth));
             match mcp::service::start_ipc_server(Arc::clone(&service)) {
                 Ok(path) => {
                     eprintln!("[mcp] local bridge socket listening at {}", path.display());
