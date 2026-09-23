@@ -222,6 +222,29 @@ function assertSessionTabsA11y() {
   assertMatch(mainPane, /onKeyDown=\{\(e\) => \{[\s\S]*ArrowRight[\s\S]*ArrowLeft/, "Session tabs must support arrow-key navigation");
 }
 
+function assertMcpSettingsPreviewAndInitialRoute() {
+  const settingsWindow = read("src/components/settings/SettingsWindowApp.tsx");
+  const mcpPanel = read("src/components/mcp/McpPanel.tsx");
+
+  assertMatch(
+    settingsWindow,
+    /section === "mcp"/,
+    "Standalone settings must honor the initial MCP section route",
+  );
+  assertOrdered(
+    mcpPanel,
+    "if (!isInTauri) return;",
+    'listen("pty:exit"',
+    "Browser previews must not subscribe to Tauri events outside the app runtime",
+  );
+  assertOrdered(
+    mcpPanel,
+    "if (!isInTauri) {",
+    'invoke<McpStatus>("mcp_status")',
+    "Browser previews must show a supported-app message instead of invoking Tauri APIs",
+  );
+}
+
 assertPackageScript();
 assertBellStyleReachesXterm();
 assertMetricsDockGatesLivePolling();
@@ -231,5 +254,6 @@ assertTerminalSpawnTimeoutCleanup();
 assertLowRiskReviewRegressions();
 assertToastA11y();
 assertSessionTabsA11y();
+assertMcpSettingsPreviewAndInitialRoute();
 
 console.log("Frontend regressions verified");

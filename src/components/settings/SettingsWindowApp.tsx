@@ -29,7 +29,15 @@ import type { SettingsSection } from "@/types/settings";
 
 function readInitialSection(): SettingsSection {
   const section = new URLSearchParams(window.location.search).get("section");
-  if (section === "terminal" || section === "sync" || section === "import" || section === "about") return section;
+  if (
+    section === "terminal" ||
+    section === "sync" ||
+    section === "import" ||
+    section === "mcp" ||
+    section === "about"
+  ) {
+    return section;
+  }
   return "terminal";
 }
 

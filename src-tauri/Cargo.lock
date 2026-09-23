@@ -5675,10 +5675,14 @@ dependencies = [
 name = "xtermius"
 version = "0.3.3"
 dependencies = [
+ "block2",
  "chrono",
  "dirs 5.0.1",
  "encoding_rs",
  "keyring",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "portable-pty",
  "reqwest 0.12.28",
  "rusqlite",

@@ -212,9 +212,8 @@ jobs:
           targets: ${{ matrix.target }}
 
       # The MCP bridge ships as a signed sidecar next to the app binary
-      # (tauri.conf.json bundle.externalBin). Stage it for this matrix target
-      # before tauri-action bundles; tauri build's beforeBuildCommand also
-      # calls `npm run build:bridge` and honors XTERM_BRIDGE_TARGET.
+      # (tauri.conf.json bundle.externalBin). Pass the matrix target to both
+      # staging and tauri-action, whose beforeBuildCommand rebuilds the bridge.
       - name: Stage MCP bridge sidecar
         if: steps.inspect_release.outputs.assets_complete != 'true'
         env:
@@ -228,6 +227,9 @@ jobs:
       - name: Run release regression tests
         if: steps.inspect_release.outputs.assets_complete != 'true'
         run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --tests
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib --bins -- -D warnings
+          npm run build
           npm run test:security
           npm run test:frontend-regressions
           EXPECTED_RELEASE_VERSION="${RELEASE_VERSION}" npm run test:updater
@@ -240,6 +242,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          XTERM_BRIDGE_TARGET: ${{ matrix.target }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "xTermius ${{ env.RELEASE_TAG }}"

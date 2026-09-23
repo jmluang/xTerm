@@ -97,9 +97,13 @@ impl MuxManager {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let Some(rest) = name.strip_prefix("xt") else { continue };
+            let Some(rest) = name.strip_prefix("xt") else {
+                continue;
+            };
             let pid_part = rest.split('-').next().unwrap_or("");
-            let Ok(pid) = pid_part.parse::<u32>() else { continue };
+            let Ok(pid) = pid_part.parse::<u32>() else {
+                continue;
+            };
             if pid == self.pid || pid_is_alive(pid) {
                 continue;
             }
@@ -147,15 +151,14 @@ impl MuxManager {
     /// registered connection. `-O check` exits 0 only when a live master for
     /// this exact target answers on this exact socket.
     pub fn verify(&self, record: &ConnectionRecord) -> Result<(), MuxError> {
-        if record.state != ConnectionState::Ready
-            && record.state != ConnectionState::Connecting
-        {
-            return Err(MuxError::Unavailable("connection is closing or exited".into()));
+        if record.state != ConnectionState::Ready && record.state != ConnectionState::Connecting {
+            return Err(MuxError::Unavailable(
+                "connection is closing or exited".into(),
+            ));
         }
-        let socket = record
-            .mux_socket
-            .clone()
-            .ok_or_else(|| MuxError::Unavailable("no managed mux entry (reconnect to enable MCP)".into()))?;
+        let socket = record.mux_socket.clone().ok_or_else(|| {
+            MuxError::Unavailable("no managed mux entry (reconnect to enable MCP)".into())
+        })?;
         if !socket.exists() {
             return Err(MuxError::Unavailable("mux socket missing".into()));
         }
@@ -370,10 +373,11 @@ fn shell_quote_single(value: &str) -> String {
     out.push('\u{27}');
     for ch in value.chars() {
         if ch == '\u{27}' {
-            out.push('\u{27}');
-            out.push('\u{5c}');
+            // End the single-quoted word, emit one escaped quote, then reopen it.
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
         }
-        out.push(ch);
     }
     out.push('\u{27}');
     out
@@ -430,7 +434,10 @@ fn is_mux_failure(output: &std::process::Output, stderr: &str) -> bool {
     !stderr.is_empty() && needles.iter().any(|needle| stderr.contains(needle))
 }
 
-fn run_ssh_with_timeout(args: &[String], timeout: Duration) -> Result<std::process::Output, MuxError> {
+fn run_ssh_with_timeout(
+    args: &[String],
+    timeout: Duration,
+) -> Result<std::process::Output, MuxError> {
     let mut child = Command::new(SSH_BIN)
         .args(args)
         .stdin(Stdio::null())
@@ -462,7 +469,9 @@ fn run_ssh_with_timeout(args: &[String], timeout: Duration) -> Result<std::proce
 #[cfg(unix)]
 fn pid_is_alive(pid: u32) -> bool {
     // kill(pid, 0): alive if Ok or EPERM.
-    unsafe { libc_kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1) }
+    unsafe {
+        libc_kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
+    }
 }
 
 #[cfg(not(unix))]
@@ -475,7 +484,6 @@ extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -517,7 +525,9 @@ mod tests {
         let stale = manager.dir.join("xt99999999-deadbeefdeadbeef");
         fs::write(&stale, b"").unwrap();
         // A socket owned by this pid must be kept.
-        let ours = manager.dir.join(format!("xt{}-aaaabbbbccccdddd", manager.pid));
+        let ours = manager
+            .dir
+            .join(format!("xt{}-aaaabbbbccccdddd", manager.pid));
         fs::write(&ours, b"").unwrap();
         // A probe socket must never be touched.
         let probe = manager.dir.join("probe_mux_abc");
@@ -551,6 +561,11 @@ mod tests {
         assert!(args.iter().any(|a| a == "ControlPath=\"/tmp/s\""));
         assert!(args.iter().any(|a| a == "-T"));
         assert_eq!(args.last().map(String::as_str), Some("'uptime'"));
+    }
+
+    #[test]
+    fn shell_quote_single_reopens_after_escaped_single_quote() {
+        assert_eq!(shell_quote_single("a'b"), "'a'\\''b'");
     }
 
     #[test]
@@ -630,13 +645,19 @@ mod tests {
             stdout: vec![],
             stderr: b"mux_client_request_session: read from master failed: Broken pipe".to_vec(),
         };
-        assert!(is_mux_failure(&failed, "mux_client_request_session: read from master failed: Broken pipe"));
+        assert!(is_mux_failure(
+            &failed,
+            "mux_client_request_session: read from master failed: Broken pipe"
+        ));
         // A remote command that simply exits 1 is NOT a mux failure.
         let remote_fail = std::process::Output {
             status: std::process::ExitStatus::from_raw(1 << 8),
             stdout: vec![],
             stderr: b"sh: nosuchcmd: command not found".to_vec(),
         };
-        assert!(!is_mux_failure(&remote_fail, "sh: nosuchcmd: command not found"));
+        assert!(!is_mux_failure(
+            &remote_fail,
+            "sh: nosuchcmd: command not found"
+        ));
     }
 }

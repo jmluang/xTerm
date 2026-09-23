@@ -18,6 +18,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+pub(crate) const MAX_CLIENT_LABEL_BYTES: usize = 128;
+pub(crate) const MAX_PAIRED_CLIENTS: usize = 32;
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -29,6 +32,28 @@ fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn migrate_grant_permissions(conn: &rusqlite::Connection) -> Result<(), String> {
+    let columns = {
+        let mut statement = conn
+            .prepare("PRAGMA table_info(mcp_grants)")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| error.to_string())?
+    };
+    if !columns.iter().any(|column| column == "observe") {
+        conn.execute_batch("ALTER TABLE mcp_grants ADD COLUMN observe INTEGER NOT NULL DEFAULT 1")
+            .map_err(|error| error.to_string())?;
+    }
+    if !columns.iter().any(|column| column == "execute") {
+        conn.execute_batch("ALTER TABLE mcp_grants ADD COLUMN execute INTEGER NOT NULL DEFAULT 0")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +75,35 @@ pub struct ConnectionGrant {
     pub generation: u64,
     /// First output sequence the client may read for this connection.
     pub grant_start_seq: u64,
+    pub observe: bool,
+    pub execute: bool,
     pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantPermissions {
+    pub observe: bool,
+    pub execute: bool,
+}
+
+impl GrantPermissions {
+    pub fn observe_only() -> Self {
+        Self {
+            observe: true,
+            execute: false,
+        }
+    }
+
+    fn any(self) -> bool {
+        self.observe || self.execute
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantPermission {
+    Observe,
+    Execute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,12 +112,14 @@ pub enum AuthError {
     BadToken,
     NoGrant,
     StaleGeneration,
+    MissingPermission,
 }
 
 struct AuthInner {
     clients: HashMap<String, PairedClient>,
     /// grants keyed by (client_id, connection_id)
     grants: HashMap<(String, String), ConnectionGrant>,
+    enabled: bool,
 }
 
 pub struct AuthState {
@@ -79,6 +134,7 @@ pub struct AuthState {
     db: Option<Mutex<rusqlite::Connection>>,
 }
 
+#[cfg(test)]
 impl Default for AuthState {
     fn default() -> Self {
         Self::in_memory()
@@ -87,11 +143,13 @@ impl Default for AuthState {
 
 impl AuthState {
     /// No persistence: for unit tests only.
+    #[cfg(test)]
     pub fn in_memory() -> Self {
         Self {
             inner: Mutex::new(AuthInner {
                 clients: HashMap::new(),
                 grants: HashMap::new(),
+                enabled: false,
             }),
             revocation_counter: AtomicU64::new(0),
             db: None,
@@ -101,8 +159,20 @@ impl AuthState {
     pub fn open(db_path: &std::path::Path) -> Result<Self, String> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|e| e.to_string())?;
+            }
         }
         let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(db_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| e.to_string())?;
+        }
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| e.to_string())?;
         conn.execute_batch(
@@ -117,15 +187,44 @@ impl AuthState {
                connection_id   TEXT NOT NULL,
                generation      INTEGER NOT NULL,
                grant_start_seq INTEGER NOT NULL,
+               observe         INTEGER NOT NULL DEFAULT 1,
+               execute         INTEGER NOT NULL DEFAULT 0,
                created_at_ms   INTEGER NOT NULL,
                PRIMARY KEY (client_id, connection_id)
+             );
+             CREATE TABLE IF NOT EXISTS mcp_settings (
+               key   TEXT PRIMARY KEY,
+               value INTEGER NOT NULL CHECK (value IN (0, 1))
              );",
         )
         .map_err(|e| e.to_string())?;
+        migrate_grant_permissions(&conn)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO mcp_settings (key, value) VALUES ('enabled', 0)",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        let enabled: i64 = conn
+            .query_row(
+                "SELECT value FROM mcp_settings WHERE key = 'enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        // Pairing identities survive restarts, operation grants do not.
+        conn.execute("DELETE FROM mcp_grants", [])
+            .map_err(|e| e.to_string())?;
+        let paired_client_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mcp_clients", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        if paired_client_count > MAX_PAIRED_CLIENTS as i64 {
+            return Err("maximum of 32 paired clients reached".into());
+        }
 
         let mut inner = AuthInner {
             clients: HashMap::new(),
             grants: HashMap::new(),
+            enabled: enabled != 0,
         };
         {
             let mut stmt = conn
@@ -146,52 +245,11 @@ impl AuthState {
                 inner.clients.insert(client.client_id.clone(), client);
             }
         }
-        {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT client_id, connection_id, generation, grant_start_seq, created_at_ms
-                     FROM mcp_grants",
-                )
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(ConnectionGrant {
-                        grant_id: String::new(), // regenerated below
-                        client_id: row.get(0)?,
-                        connection_id: row.get(1)?,
-                        generation: row.get(2)?,
-                        grant_start_seq: row.get(3)?,
-                        created_at_ms: row.get(4)?,
-                    })
-                })
-                .map_err(|e| e.to_string())?;
-            for grant in rows {
-                let mut grant = grant.map_err(|e| e.to_string())?;
-                grant.grant_id = uuid::Uuid::new_v4().to_string();
-                inner
-                    .grants
-                    .insert((grant.client_id.clone(), grant.connection_id.clone()), grant);
-            }
-        }
-
         Ok(Self {
             inner: Mutex::new(inner),
             revocation_counter: AtomicU64::new(0),
             db: Some(Mutex::new(conn)),
         })
-    }
-
-    /// Preferred app entry point: persistent store with graceful fallback to
-    /// in-memory when the DB cannot be opened (MCP must never take the app
-    /// down; it just loses pairing across restarts).
-    pub fn open_or_memory(db_path: &std::path::Path) -> Self {
-        match Self::open(db_path) {
-            Ok(state) => state,
-            Err(error) => {
-                eprintln!("[mcp] pairing store unavailable, using memory only: {error}");
-                Self::in_memory()
-            }
-        }
     }
 
     fn mcp_db_path() -> std::path::PathBuf {
@@ -201,15 +259,87 @@ impl AuthState {
             .join("mcp.db")
     }
 
-    /// App entry point using the default store location.
-    pub fn open_default() -> Self {
-        Self::open_or_memory(&Self::mcp_db_path())
+    /// App entry point using the required persistent store.
+    pub fn open_default() -> Result<Self, String> {
+        Self::open(&Self::mcp_db_path())
     }
 
-    fn persist_client(&self, client: &PairedClient) {
-        let Some(db) = self.db.as_ref() else { return };
-        let Ok(conn) = db.lock() else { return };
-        let _ = conn.execute(
+    pub fn is_enabled(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|inner| inner.enabled)
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub fn set_enabled(&self, enabled: bool) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let changed = inner.enabled != enabled || (!enabled && !inner.grants.is_empty());
+        if enabled {
+            self.persist_enabled(true, false)?;
+            inner.enabled = true;
+        } else {
+            let persist_result = self.persist_enabled(false, true);
+            inner.enabled = false;
+            inner.grants.clear();
+            if changed {
+                self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+            }
+            persist_result?;
+        }
+        if changed && enabled {
+            self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    /// Update only in-memory authorization while the service access gate is
+    /// held. The corresponding SQLite write must happen after releasing it.
+    pub(crate) fn set_enabled_in_memory(&self, enabled: bool) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let changed = inner.enabled != enabled || (!enabled && !inner.grants.is_empty());
+        inner.enabled = enabled;
+        if !enabled {
+            inner.grants.clear();
+        }
+        if changed {
+            self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn persist_enabled_value(
+        &self,
+        enabled: bool,
+        clear_grants: bool,
+    ) -> Result<(), String> {
+        self.persist_enabled(enabled, clear_grants)
+    }
+
+    fn persist_enabled(&self, enabled: bool, clear_grants: bool) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let mut conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE mcp_settings SET value = ?1 WHERE key = 'enabled'",
+            [i64::from(enabled)],
+        )
+        .map_err(|e| e.to_string())?;
+        if clear_grants {
+            tx.execute("DELETE FROM mcp_grants", [])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn persist_client(&self, client: &PairedClient) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        conn.execute(
             "INSERT INTO mcp_clients (client_id, label, token_hash, created_at_ms)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(client_id) DO UPDATE SET label=?2, token_hash=?3, created_at_ms=?4",
@@ -219,92 +349,159 @@ impl AuthState {
                 client.token_hash,
                 client.created_at_ms
             ],
-        );
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
-    fn persist_delete_client(&self, client_id: &str) {
-        let Some(db) = self.db.as_ref() else { return };
-        let Ok(conn) = db.lock() else { return };
-        let _ = conn.execute("DELETE FROM mcp_clients WHERE client_id = ?1", [client_id]);
-        let _ = conn.execute("DELETE FROM mcp_grants WHERE client_id = ?1", [client_id]);
+    fn persist_delete_client(&self, client_id: &str) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let mut conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM mcp_clients WHERE client_id = ?1", [client_id])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM mcp_grants WHERE client_id = ?1", [client_id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
     }
 
-    fn persist_grant(&self, grant: &ConnectionGrant) {
-        let Some(db) = self.db.as_ref() else { return };
-        let Ok(conn) = db.lock() else { return };
-        let _ = conn.execute(
-            "INSERT INTO mcp_grants (client_id, connection_id, generation, grant_start_seq, created_at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+    fn persist_grant(&self, grant: &ConnectionGrant) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        conn.execute(
+            "INSERT INTO mcp_grants
+             (client_id, connection_id, generation, grant_start_seq, observe, execute, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(client_id, connection_id) DO UPDATE SET
-               generation=?3, grant_start_seq=?4, created_at_ms=?5",
+               generation=?3, grant_start_seq=?4, observe=?5, execute=?6, created_at_ms=?7",
             rusqlite::params![
                 grant.client_id,
                 grant.connection_id,
                 grant.generation as i64,
                 grant.grant_start_seq as i64,
+                i64::from(grant.observe),
+                i64::from(grant.execute),
                 grant.created_at_ms
             ],
-        );
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
-    fn persist_delete_grant(&self, client_id: &str, connection_id: &str) {
-        let Some(db) = self.db.as_ref() else { return };
-        let Ok(conn) = db.lock() else { return };
-        let _ = conn.execute(
+    fn persist_delete_grant(&self, client_id: &str, connection_id: &str) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        conn.execute(
             "DELETE FROM mcp_grants WHERE client_id = ?1 AND connection_id = ?2",
             [client_id, connection_id],
-        );
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
-    fn persist_delete_grants_for_connection(&self, connection_id: &str) {
-        let Some(db) = self.db.as_ref() else { return };
-        let Ok(conn) = db.lock() else { return };
-        let _ = conn.execute(
+    fn persist_delete_grants_for_connection(&self, connection_id: &str) -> Result<(), String> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
+        let conn = db.lock().map_err(|_| "MCP database lock poisoned")?;
+        conn.execute(
             "DELETE FROM mcp_grants WHERE connection_id = ?1",
             [connection_id],
-        );
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
     /// Create a new pairing. Returns (client_id, raw token). The raw token is
     /// returned exactly once and never stored.
-    pub fn pair_client(&self, label: Option<String>) -> Option<(String, String)> {
+    pub fn pair_client(&self, label: Option<String>) -> Result<(String, String), String> {
+        let label = label
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty());
+        if label
+            .as_ref()
+            .is_some_and(|label| label.len() > MAX_CLIENT_LABEL_BYTES)
+        {
+            return Err("client label exceeds 128 UTF-8 bytes".into());
+        }
         let client_id = uuid::Uuid::new_v4().to_string();
-        let token = uuid::Uuid::new_v4().simple().to_string()
-            + &uuid::Uuid::new_v4().simple().to_string();
+        let token =
+            uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
         let client = PairedClient {
             client_id: client_id.clone(),
             label: label.filter(|l| !l.trim().is_empty()),
             token_hash: hash_token(&token),
             created_at_ms: now_ms(),
         };
-        let mut inner = self.inner.lock().ok()?;
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        if inner.clients.len() >= MAX_PAIRED_CLIENTS {
+            return Err("maximum of 32 paired clients reached".into());
+        }
+        self.persist_client(&client)?;
         inner.clients.insert(client_id.clone(), client.clone());
-        drop(inner);
-        self.persist_client(&client);
-        Some((client_id, token))
+        Ok((client_id, token))
     }
 
     pub fn authenticate(&self, client_id: &str, token: &str) -> Result<(), AuthError> {
         let inner = self.inner.lock().map_err(|_| AuthError::UnknownClient)?;
-        let client = inner.clients.get(client_id).ok_or(AuthError::UnknownClient)?;
+        let client = inner
+            .clients
+            .get(client_id)
+            .ok_or(AuthError::UnknownClient)?;
         if client.token_hash != hash_token(token) {
             return Err(AuthError::BadToken);
         }
         Ok(())
     }
 
+    pub(crate) fn is_paired(&self, client_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|inner| inner.clients.contains_key(client_id))
+            .unwrap_or(false)
+    }
+
     /// User-driven grant: client may observe (and later, request commands on)
     /// this exact connection generation from `grant_start_seq` onward.
+    #[allow(dead_code)] // convenient observe-only helper for trusted in-process callers
     pub fn grant_connection(
         &self,
         client_id: &str,
         connection_id: &str,
         generation: u64,
         grant_start_seq: u64,
-    ) -> Option<ConnectionGrant> {
-        let mut inner = self.inner.lock().ok()?;
+    ) -> Result<ConnectionGrant, String> {
+        self.set_grant_permissions(
+            client_id,
+            connection_id,
+            generation,
+            grant_start_seq,
+            GrantPermissions::observe_only(),
+        )?
+        .ok_or_else(|| "unknown paired client".to_string())
+    }
+
+    pub fn set_grant_permissions(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+        generation: u64,
+        grant_start_seq: u64,
+        permissions: GrantPermissions,
+    ) -> Result<Option<ConnectionGrant>, String> {
+        if !permissions.any() {
+            self.revoke(client_id, connection_id)?;
+            return Ok(None);
+        }
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
         if !inner.clients.contains_key(client_id) {
-            return None;
+            return Err("unknown paired client".into());
         }
         let grant = ConnectionGrant {
             grant_id: uuid::Uuid::new_v4().to_string(),
@@ -312,21 +509,145 @@ impl AuthState {
             connection_id: connection_id.to_string(),
             generation,
             grant_start_seq,
+            observe: permissions.observe,
+            execute: permissions.execute,
             created_at_ms: now_ms(),
         };
+        let key = (client_id.to_string(), connection_id.to_string());
+        if let Err(error) = self.persist_grant(&grant) {
+            if inner.grants.remove(&key).is_some() {
+                self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+            }
+            return Err(error);
+        }
+        inner.grants.insert(key, grant.clone());
+        self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(grant))
+    }
+
+    /// Prepare a grant value without publishing it to request authorization.
+    /// The caller persists it first, then publishes under the service gate.
+    pub(crate) fn prepare_grant(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+        generation: u64,
+        grant_start_seq: u64,
+        permissions: GrantPermissions,
+    ) -> Result<ConnectionGrant, String> {
+        let inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        if !inner.clients.contains_key(client_id) {
+            return Err("unknown paired client".into());
+        }
+        drop(inner);
+        Ok(ConnectionGrant {
+            grant_id: uuid::Uuid::new_v4().to_string(),
+            client_id: client_id.to_string(),
+            connection_id: connection_id.to_string(),
+            generation,
+            grant_start_seq,
+            observe: permissions.observe,
+            execute: permissions.execute,
+            created_at_ms: now_ms(),
+        })
+    }
+
+    pub(crate) fn persist_prepared_grant(&self, grant: &ConnectionGrant) -> Result<(), String> {
+        self.persist_grant(grant)
+    }
+
+    pub(crate) fn publish_prepared_grant(&self, grant: ConnectionGrant) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        if !inner.clients.contains_key(&grant.client_id) {
+            return Err("unknown paired client".into());
+        }
+        inner.grants.insert(
+            (grant.client_id.clone(), grant.connection_id.clone()),
+            grant,
+        );
+        self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub(crate) fn remove_grant_in_memory(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+    ) -> Result<bool, String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let removed = inner
+            .grants
+            .remove(&(client_id.to_string(), connection_id.to_string()))
+            .is_some();
+        if removed {
+            self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(removed)
+    }
+
+    pub(crate) fn persist_grant_removal(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+    ) -> Result<(), String> {
+        self.persist_delete_grant(client_id, connection_id)
+    }
+
+    pub(crate) fn revoke_connection_in_memory(&self, connection_id: &str) -> Result<bool, String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let before = inner.grants.len();
         inner
             .grants
-            .insert((client_id.to_string(), connection_id.to_string()), grant.clone());
-        drop(inner);
-        self.persist_grant(&grant);
-        self.revocation_counter.fetch_add(1, Ordering::SeqCst);
-        Some(grant)
+            .retain(|_, grant| grant.connection_id != connection_id);
+        let removed = inner.grants.len() != before;
+        if removed {
+            self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(removed)
+    }
+
+    pub(crate) fn persist_connection_revoke(&self, connection_id: &str) -> Result<(), String> {
+        self.persist_delete_grants_for_connection(connection_id)
+    }
+
+    pub(crate) fn unpair_in_memory(&self, client_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let had_client = inner.clients.remove(client_id).is_some();
+        let before = inner.grants.len();
+        inner.grants.retain(|_, grant| grant.client_id != client_id);
+        if had_client || inner.grants.len() != before {
+            self.revocation_counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn persist_unpair(&self, client_id: &str) -> Result<(), String> {
+        self.persist_delete_client(client_id)
     }
 
     /// Authorize one concrete operation. Validates the client token, the
     /// grant, and that the connection's current generation still matches the
     /// granted one.
     pub fn authorize(
+        &self,
+        client_id: &str,
+        token: &str,
+        connection_id: &str,
+        current_generation: u64,
+        permission: GrantPermission,
+    ) -> Result<ConnectionGrant, AuthError> {
+        let grant = self.authorize_grant(client_id, token, connection_id, current_generation)?;
+        let allowed = match permission {
+            GrantPermission::Observe => grant.observe,
+            GrantPermission::Execute => grant.execute,
+        };
+        if !allowed {
+            return Err(AuthError::MissingPermission);
+        }
+        Ok(grant)
+    }
+
+    pub fn authorize_grant(
         &self,
         client_id: &str,
         token: &str,
@@ -346,57 +667,87 @@ impl AuthState {
         Ok(grant)
     }
 
-    pub fn revoke(&self, client_id: &str, connection_id: &str) -> bool {
-        let removed = self
-            .inner
+    /// Trusted in-process grant lookup for the approval dispatch path.
+    pub(crate) fn current_grant(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+        current_generation: u64,
+        permission: GrantPermission,
+    ) -> Result<ConnectionGrant, AuthError> {
+        let inner = self.inner.lock().map_err(|_| AuthError::UnknownClient)?;
+        let grant = inner
+            .grants
+            .get(&(client_id.to_string(), connection_id.to_string()))
+            .cloned()
+            .ok_or(AuthError::NoGrant)?;
+        if grant.generation != current_generation {
+            return Err(AuthError::StaleGeneration);
+        }
+        let allowed = match permission {
+            GrantPermission::Observe => grant.observe,
+            GrantPermission::Execute => grant.execute,
+        };
+        if !allowed {
+            return Err(AuthError::MissingPermission);
+        }
+        Ok(grant)
+    }
+
+    pub fn has_observe_grant(&self, connection_id: &str, current_generation: u64) -> bool {
+        self.inner
             .lock()
-            .map(|mut inner| {
-                inner
-                    .grants
-                    .remove(&(client_id.to_string(), connection_id.to_string()))
-                    .is_some()
+            .map(|inner| {
+                inner.grants.values().any(|grant| {
+                    grant.connection_id == connection_id
+                        && grant.generation == current_generation
+                        && grant.observe
+                })
             })
-            .unwrap_or(false);
+            .unwrap_or(false)
+    }
+
+    pub fn revoke(&self, client_id: &str, connection_id: &str) -> Result<bool, String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let removed = inner
+            .grants
+            .remove(&(client_id.to_string(), connection_id.to_string()))
+            .is_some();
         if removed {
-            self.persist_delete_grant(client_id, connection_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
-        removed
+        self.persist_delete_grant(client_id, connection_id)?;
+        Ok(removed)
     }
 
     /// Drop every grant pointing at a connection (close/exit path).
-    pub fn revoke_connection(&self, connection_id: &str) {
-        let removed = self
-            .inner
-            .lock()
-            .map(|mut inner| {
-                let before = inner.grants.len();
-                inner.grants.retain(|_, grant| grant.connection_id != connection_id);
-                inner.grants.len() != before
-            })
-            .unwrap_or(false);
+    #[cfg(test)]
+    pub fn revoke_connection(&self, connection_id: &str) -> Result<bool, String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let before = inner.grants.len();
+        inner
+            .grants
+            .retain(|_, grant| grant.connection_id != connection_id);
+        let removed = inner.grants.len() != before;
         if removed {
-            self.persist_delete_grants_for_connection(connection_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
+        self.persist_delete_grants_for_connection(connection_id)?;
+        Ok(removed)
     }
 
     /// Unpair a client entirely: token stops working, all its grants die.
-    pub fn unpair(&self, client_id: &str) {
-        let changed = self
-            .inner
-            .lock()
-            .map(|mut inner| {
-                let had_client = inner.clients.remove(client_id).is_some();
-                let before = inner.grants.len();
-                inner.grants.retain(|_, grant| grant.client_id != client_id);
-                had_client || inner.grants.len() != before
-            })
-            .unwrap_or(false);
+    #[cfg(test)]
+    pub fn unpair(&self, client_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let had_client = inner.clients.remove(client_id).is_some();
+        let before = inner.grants.len();
+        inner.grants.retain(|_, grant| grant.client_id != client_id);
+        let changed = had_client || inner.grants.len() != before;
         if changed {
-            self.persist_delete_client(client_id);
             self.revocation_counter.fetch_add(1, Ordering::SeqCst);
         }
+        self.persist_delete_client(client_id)
     }
 
     #[allow(dead_code)] // retained as phase B/C integration surface
@@ -418,8 +769,16 @@ impl AuthState {
                         grants: inner
                             .grants
                             .values()
-                            .filter(|grant| grant.client_id == client.client_id)
-                            .map(|grant| grant.connection_id.clone())
+                            .filter(|grant| {
+                                grant.client_id == client.client_id
+                                    && (grant.observe || grant.execute)
+                            })
+                            .map(|grant| ConnectionGrantSummary {
+                                connection_id: grant.connection_id.clone(),
+                                generation: grant.generation,
+                                observe: grant.observe,
+                                execute: grant.execute,
+                            })
                             .collect(),
                     })
                     .collect()
@@ -434,7 +793,16 @@ pub struct PairedClientSummary {
     pub client_id: String,
     pub label: Option<String>,
     pub created_at_ms: u64,
-    pub grants: Vec<String>,
+    pub grants: Vec<ConnectionGrantSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionGrantSummary {
+    pub connection_id: String,
+    pub generation: u64,
+    pub observe: bool,
+    pub execute: bool,
 }
 
 #[cfg(test)]
@@ -442,45 +810,119 @@ mod tests {
     use super::*;
 
     fn temp_db(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "xt-auth-{}-{tag}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("xt-auth-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("mcp.db")
     }
 
-    #[test]
-    fn pairing_and_grants_survive_restart() {
-        let db = temp_db("survive");
-        {
-            let auth = AuthState::open(&db).unwrap();
-            let (client_id, token) = auth.pair_client(Some("claude".into())).unwrap();
-            auth.grant_connection(&client_id, "conn-1", 7, 42).unwrap();
-            // simulate restart: drop everything
-        }
-        let auth = AuthState::open(&db).unwrap();
-        let clients = auth.list_clients();
-        assert_eq!(clients.len(), 1);
-        assert_eq!(clients[0].label.as_deref(), Some("claude"));
-        assert_eq!(clients[0].grants, vec!["conn-1".to_string()]);
-
-        // Raw token still authenticates (hash persisted, not the token).
-        let client_id = &clients[0].client_id;
-        // token was dropped with the first instance; re-derive by pairing a
-        // second client and verifying a restart keeps BOTH clients working.
-        let (_id2, token2) = auth.pair_client(None).unwrap();
-        drop(auth);
-        let auth = AuthState::open(&db).unwrap();
-        assert!(auth.authenticate(&_id2, &token2).is_ok());
-        assert_eq!(auth.list_clients().len(), 2);
-        // Grant reloaded with the right generation/start seq.
-        assert!(auth.authorize(client_id, "", "conn-1", 7).is_err()); // empty token -> BadToken, proves client exists
+    fn debug_is_err(value: &impl std::fmt::Debug) -> bool {
+        format!("{value:?}").starts_with("Err(")
     }
 
     #[test]
-    fn unpair_and_revoke_persist() {
+    fn paired_clients_persist_but_operation_grants_do_not_restore() {
+        let db = temp_db("pairing-no-grants");
+        let (client_id, token) = {
+            let auth = AuthState::open(&db).unwrap();
+            let (client_id, token) = auth.pair_client(Some("claude".into())).unwrap();
+            auth.grant_connection(&client_id, "conn-1", 7, 42).unwrap();
+            (client_id, token)
+        };
+
+        let auth = AuthState::open(&db).unwrap();
+        let clients = auth.list_clients();
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].client_id, client_id);
+        assert_eq!(clients[0].label.as_deref(), Some("claude"));
+        assert!(clients[0].grants.is_empty());
+        assert!(auth.authenticate(&client_id, &token).is_ok());
+        let persisted_grants: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM mcp_grants", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(persisted_grants, 0);
+        assert_eq!(
+            auth.authorize(&client_id, &token, "conn-1", 7, GrantPermission::Observe)
+                .unwrap_err(),
+            AuthError::NoGrant
+        );
+    }
+
+    #[test]
+    fn fresh_store_persists_mcp_disabled_by_default() {
+        let db = temp_db("disabled-default");
+        let _auth = AuthState::open(&db).unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let enabled: i64 = conn
+            .query_row(
+                "SELECT value FROM mcp_settings WHERE key = 'enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(enabled, 0);
+    }
+
+    #[test]
+    fn enabled_setting_survives_restart() {
+        let db = temp_db("enabled-persist");
+        {
+            let auth = AuthState::open(&db).unwrap();
+            auth.set_enabled(true).unwrap();
+        }
+
+        let auth = AuthState::open(&db).unwrap();
+        assert!(auth.is_enabled());
+    }
+
+    #[test]
+    fn old_grant_schema_migrates_to_observe_only() {
+        let db = temp_db("grant-permission-migration");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mcp_clients (
+               client_id TEXT PRIMARY KEY,
+               label TEXT,
+               token_hash TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL
+             );
+             CREATE TABLE mcp_grants (
+               client_id TEXT NOT NULL,
+               connection_id TEXT NOT NULL,
+               generation INTEGER NOT NULL,
+               grant_start_seq INTEGER NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               PRIMARY KEY (client_id, connection_id)
+             );
+             INSERT INTO mcp_grants VALUES ('legacy-client', 'legacy-connection', 1, 0, 1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let _auth = AuthState::open(&db).unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO mcp_grants
+             (client_id, connection_id, generation, grant_start_seq, created_at_ms)
+             VALUES ('new-client', 'new-connection', 2, 0, 2)",
+            [],
+        )
+        .unwrap();
+        let (observe, execute): (i64, i64) = conn
+            .query_row(
+                "SELECT observe, execute FROM mcp_grants WHERE client_id = 'new-client'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!((observe, execute), (1, 0));
+    }
+
+    #[test]
+    fn unpair_persists_after_operation_grants_are_cleared_on_restart() {
         let db = temp_db("revoke");
         let (client_id, token) = {
             let auth = AuthState::open(&db).unwrap();
@@ -491,14 +933,15 @@ mod tests {
         {
             let auth = AuthState::open(&db).unwrap();
             assert!(auth.authenticate(&client_id, &token).is_ok());
-            assert!(auth.revoke(&client_id, "conn-1"));
+            assert!(!auth.revoke(&client_id, "conn-1").unwrap());
         }
         let auth = AuthState::open(&db).unwrap();
         assert_eq!(
-            auth.authorize(&client_id, &token, "conn-1", 1).unwrap_err(),
+            auth.authorize(&client_id, &token, "conn-1", 1, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::NoGrant
         );
-        auth.unpair(&client_id);
+        auth.unpair(&client_id).unwrap();
         drop(auth);
         let auth = AuthState::open(&db).unwrap();
         assert_eq!(
@@ -509,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_revoke_persists_across_restart() {
+    fn connection_revoke_keeps_pairings_but_not_grants_across_restart() {
         let db = temp_db("connrevoke");
         let (a, ta) = {
             let auth = AuthState::open(&db).unwrap();
@@ -518,26 +961,164 @@ mod tests {
             auth.grant_connection(&a, "conn-1", 1, 0).unwrap();
             auth.grant_connection(&b, "conn-1", 1, 0).unwrap();
             auth.grant_connection(&b, "conn-2", 1, 0).unwrap();
-            auth.revoke_connection("conn-1");
+            auth.revoke_connection("conn-1").unwrap();
             (a, ta)
         };
         let auth = AuthState::open(&db).unwrap();
+        assert_eq!(auth.list_clients().len(), 2);
+        assert!(auth
+            .list_clients()
+            .iter()
+            .all(|client| client.grants.is_empty()));
         assert_eq!(
-            auth.authorize(&a, &ta, "conn-1", 1).unwrap_err(),
+            auth.authorize(&a, &ta, "conn-1", 1, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::NoGrant
         );
-        // conn-2 grant survived (only conn-1 was revoked).
-        assert_eq!(auth.list_clients().len(), 2);
     }
 
     #[test]
-    fn open_or_memory_falls_back_gracefully() {
-        // A path that cannot be a database (a directory) must not panic.
+    fn persistent_open_reports_database_errors() {
+        // A path that cannot be a database must fail instead of opening an
+        // unauthenticated in-memory service.
         let dir = temp_db("fallback");
         std::fs::create_dir_all(&dir).unwrap();
-        let auth = AuthState::open_or_memory(&dir); // dir itself, not a file
+        assert!(AuthState::open(&dir).is_err()); // dir itself, not a file
+    }
+
+    #[test]
+    fn pair_and_grant_storage_failures_are_reported_without_memory_grants() {
+        let db = temp_db("write-failure-pair");
+        let auth = AuthState::open(&db).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_pair BEFORE INSERT ON mcp_clients
+                 BEGIN SELECT RAISE(ABORT, 'pair write rejected'); END;",
+            )
+            .unwrap();
+        let pair_result = auth.pair_client(None);
+        assert!(
+            debug_is_err(&pair_result),
+            "pair write error must reach caller"
+        );
+        assert!(auth.list_clients().is_empty());
+
+        let db = temp_db("write-failure-grant");
+        let auth = AuthState::open(&db).unwrap();
+        let (client_id, _) = auth.pair_client(None).unwrap();
+        auth.grant_connection(&client_id, "conn-1", 1, 0).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_grant BEFORE INSERT ON mcp_grants
+                 BEGIN SELECT RAISE(ABORT, 'grant write rejected'); END;",
+            )
+            .unwrap();
+        let grant_result = auth.set_grant_permissions(
+            &client_id,
+            "conn-1",
+            1,
+            0,
+            GrantPermissions {
+                observe: true,
+                execute: true,
+            },
+        );
+        assert!(
+            debug_is_err(&grant_result),
+            "grant write error must reach caller"
+        );
+        assert!(auth.list_clients()[0].grants.is_empty());
+        assert!(auth.authorize_grant(&client_id, "", "conn-1", 1).is_err());
+    }
+
+    #[test]
+    fn revoke_and_unpair_storage_failures_are_reported_and_fail_closed() {
+        let db = temp_db("write-failure-revoke");
+        let auth = AuthState::open(&db).unwrap();
         let (client_id, token) = auth.pair_client(None).unwrap();
-        assert!(auth.authenticate(&client_id, &token).is_ok());
+        auth.grant_connection(&client_id, "conn-1", 1, 0).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_revoke BEFORE DELETE ON mcp_grants
+                 BEGIN SELECT RAISE(ABORT, 'revoke write rejected'); END;",
+            )
+            .unwrap();
+
+        let revoke_result = auth.revoke(&client_id, "conn-1");
+        assert!(
+            debug_is_err(&revoke_result),
+            "revoke write error must reach caller"
+        );
+        assert!(auth
+            .authorize_grant(&client_id, &token, "conn-1", 1)
+            .is_err());
+        drop(auth);
+        assert!(AuthState::open(&db).is_err());
+
+        let db = temp_db("write-failure-unpair");
+        let auth = AuthState::open(&db).unwrap();
+        let (client_id, token) = auth.pair_client(None).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_unpair BEFORE DELETE ON mcp_clients
+                 BEGIN SELECT RAISE(ABORT, 'unpair write rejected'); END;",
+            )
+            .unwrap();
+
+        let unpair_result = auth.unpair(&client_id);
+        assert!(
+            debug_is_err(&unpair_result),
+            "unpair write error must reach caller"
+        );
+        assert_eq!(
+            auth.authenticate(&client_id, &token).unwrap_err(),
+            AuthError::UnknownClient
+        );
+    }
+
+    #[test]
+    fn failed_disable_write_still_disables_and_revokes_in_memory() {
+        let db = temp_db("write-failure-disable");
+        let auth = AuthState::open(&db).unwrap();
+        auth.set_enabled(true).unwrap();
+        let (client_id, token) = auth.pair_client(None).unwrap();
+        auth.grant_connection(&client_id, "conn-1", 1, 0).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_disable BEFORE UPDATE ON mcp_settings
+                 BEGIN SELECT RAISE(ABORT, 'disable write rejected'); END;",
+            )
+            .unwrap();
+
+        let result = auth.set_enabled(false);
+        assert!(debug_is_err(&result));
+        assert!(!auth.is_enabled());
+        assert!(auth
+            .authorize_grant(&client_id, &token, "conn-1", 1)
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_store_permissions_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let db = temp_db("permissions");
+        let _auth = AuthState::open(&db).unwrap();
+        let database_mode = std::fs::metadata(&db).unwrap().permissions().mode() & 0o777;
+        let directory_mode = std::fs::metadata(db.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(database_mode, 0o600);
+        assert_eq!(directory_mode, 0o700);
     }
 
     #[test]
@@ -560,21 +1141,73 @@ mod tests {
     }
 
     #[test]
+    fn pairing_trims_labels_and_enforces_utf8_byte_limit() {
+        let auth = AuthState::default();
+        let exact = format!("  {}  ", "界".repeat(MAX_CLIENT_LABEL_BYTES / 3));
+        let (client_id, _) = auth.pair_client(Some(exact)).unwrap();
+        assert_eq!(auth.list_clients()[0].client_id, client_id);
+        assert_eq!(
+            auth.list_clients()[0].label.as_deref(),
+            Some("界".repeat(42).as_str())
+        );
+
+        let too_long = "é".repeat(MAX_CLIENT_LABEL_BYTES / 2 + 1);
+        let error = auth.pair_client(Some(too_long)).unwrap_err();
+        assert_eq!(error, "client label exceeds 128 UTF-8 bytes");
+        assert_eq!(auth.list_clients().len(), 1);
+    }
+
+    #[test]
+    fn pairing_caps_clients_and_unpair_frees_a_slot() {
+        let auth = AuthState::default();
+        let mut clients = Vec::new();
+        for _ in 0..MAX_PAIRED_CLIENTS {
+            clients.push(auth.pair_client(None).unwrap().0);
+        }
+        let error = auth.pair_client(None).unwrap_err();
+        assert_eq!(error, "maximum of 32 paired clients reached");
+        auth.unpair(&clients[0]).unwrap();
+        auth.pair_client(None).unwrap();
+        assert_eq!(auth.list_clients().len(), MAX_PAIRED_CLIENTS);
+    }
+
+    #[test]
+    fn persistent_pairings_count_toward_client_cap() {
+        let db = temp_db("pairing-cap-persistent");
+        {
+            let auth = AuthState::open(&db).unwrap();
+            for _ in 0..MAX_PAIRED_CLIENTS {
+                auth.pair_client(None).unwrap();
+            }
+        }
+        let auth = AuthState::open(&db).unwrap();
+        assert_eq!(auth.list_clients().len(), MAX_PAIRED_CLIENTS);
+        assert_eq!(
+            auth.pair_client(None).unwrap_err(),
+            "maximum of 32 paired clients reached"
+        );
+    }
+
+    #[test]
     fn grants_bind_generation_and_start_seq() {
         let auth = AuthState::default();
         let (client_id, token) = auth.pair_client(None).unwrap();
         let grant = auth.grant_connection(&client_id, "conn1", 7, 42).unwrap();
         assert_eq!(grant.grant_start_seq, 42);
 
-        assert!(auth.authorize(&client_id, &token, "conn1", 7).is_ok());
+        assert!(auth
+            .authorize(&client_id, &token, "conn1", 7, GrantPermission::Observe)
+            .is_ok());
         // Reconnect bumped the generation: old grant no longer applies.
         assert_eq!(
-            auth.authorize(&client_id, &token, "conn1", 8).unwrap_err(),
+            auth.authorize(&client_id, &token, "conn1", 8, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::StaleGeneration
         );
         // A different connection on the same host is a different id.
         assert_eq!(
-            auth.authorize(&client_id, &token, "conn2", 7).unwrap_err(),
+            auth.authorize(&client_id, &token, "conn2", 7, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::NoGrant
         );
     }
@@ -586,10 +1219,11 @@ mod tests {
         auth.grant_connection(&client_id, "conn1", 1, 0).unwrap();
         let before = auth.revocation_counter();
 
-        assert!(auth.revoke(&client_id, "conn1"));
+        assert!(auth.revoke(&client_id, "conn1").unwrap());
         assert!(auth.revocation_counter() > before);
         assert_eq!(
-            auth.authorize(&client_id, &token, "conn1", 1).unwrap_err(),
+            auth.authorize(&client_id, &token, "conn1", 1, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::NoGrant
         );
     }
@@ -599,13 +1233,14 @@ mod tests {
         let auth = AuthState::default();
         let (client_id, token) = auth.pair_client(None).unwrap();
         auth.grant_connection(&client_id, "conn1", 1, 0).unwrap();
-        auth.unpair(&client_id);
+        auth.unpair(&client_id).unwrap();
         assert_eq!(
             auth.authenticate(&client_id, &token).unwrap_err(),
             AuthError::UnknownClient
         );
         assert_eq!(
-            auth.authorize(&client_id, &token, "conn1", 1).unwrap_err(),
+            auth.authorize(&client_id, &token, "conn1", 1, GrantPermission::Observe)
+                .unwrap_err(),
             AuthError::UnknownClient
         );
     }
@@ -619,9 +1254,15 @@ mod tests {
         auth.grant_connection(&b, "conn1", 1, 0).unwrap();
         auth.grant_connection(&b, "conn2", 1, 0).unwrap();
 
-        auth.revoke_connection("conn1");
-        assert!(auth.authorize(&a, &token_a, "conn1", 1).is_err());
-        assert!(auth.authorize(&b, &token_b, "conn1", 1).is_err());
-        assert!(auth.authorize(&b, &token_b, "conn2", 1).is_ok());
+        auth.revoke_connection("conn1").unwrap();
+        assert!(auth
+            .authorize(&a, &token_a, "conn1", 1, GrantPermission::Observe)
+            .is_err());
+        assert!(auth
+            .authorize(&b, &token_b, "conn1", 1, GrantPermission::Observe)
+            .is_err());
+        assert!(auth
+            .authorize(&b, &token_b, "conn2", 1, GrantPermission::Observe)
+            .is_ok());
     }
 }

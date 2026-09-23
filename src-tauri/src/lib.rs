@@ -8,6 +8,8 @@ mod models;
 mod mux;
 mod output_buffer;
 mod pty;
+#[cfg(target_os = "macos")]
+mod session_monitor;
 mod ssh_config;
 mod ssh_import;
 mod task_engine;
@@ -28,8 +30,25 @@ pub(crate) fn mcp_service() -> Option<Arc<mcp::service::McpService>> {
 fn init_mcp_service() {
     match mux::MuxManager::new() {
         Ok(mux) => {
-            let auth = mcp::auth::AuthState::open_default();
-            let service = Arc::new(mcp::service::McpService::with_auth(Arc::new(mux), auth));
+            let auth = match mcp::auth::AuthState::open_default() {
+                Ok(auth) => auth,
+                Err(error) => {
+                    eprintln!("[mcp] persistent auth store unavailable; MCP disabled: {error}");
+                    return;
+                }
+            };
+            let audit = match mcp::audit::TaskAuditStore::open_default() {
+                Ok(audit) => Arc::new(audit),
+                Err(error) => {
+                    eprintln!("[mcp] task audit store unavailable; MCP disabled: {error}");
+                    return;
+                }
+            };
+            let service = Arc::new(mcp::service::McpService::with_persistent_state(
+                Arc::new(mux),
+                auth,
+                audit,
+            ));
             match mcp::service::start_ipc_server(Arc::clone(&service)) {
                 Ok(path) => {
                     eprintln!("[mcp] local bridge socket listening at {}", path.display());
@@ -40,6 +59,12 @@ fn init_mcp_service() {
                         std::thread::sleep(std::time::Duration::from_secs(60));
                         let Some(service) = mcp_service() else { return };
                         service.tasks.sweep_finished();
+                        if let Err(error) = service.tasks.expire_pending_approvals() {
+                            eprintln!("[mcp] pending approval expiry failed: {error:?}");
+                        }
+                        if let Err(error) = service.tasks.sweep_audit() {
+                            eprintln!("[mcp] task audit sweep failed: {error}");
+                        }
                         let cutoff = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)

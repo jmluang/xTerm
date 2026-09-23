@@ -6,6 +6,7 @@
 
 use serde::Serialize;
 
+use crate::mcp::auth::GrantPermissions;
 use crate::mcp::service::McpService;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +24,7 @@ pub struct McpConnectionView {
     pub generation: u64,
     pub host_name: String,
     pub user: String,
+    pub port: u16,
     pub alias: String,
     pub state: String,
     /// Connection predates managed reuse or mux setup failed: the user must
@@ -31,8 +33,75 @@ pub struct McpConnectionView {
     pub requires_reconnect: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpBridgeInfo {
+    /// The bridge is resolved beside the running application binary. This is
+    /// deliberately not a PATH lookup, and no socket or credential is
+    /// returned to the frontend.
+    pub executable_path: String,
+    /// `packaged` for an app bundle, otherwise `development` for a local
+    /// target/debug or target/release checkout.
+    pub environment: &'static str,
+}
+
 fn service() -> Result<std::sync::Arc<McpService>, String> {
     crate::mcp_service().ok_or_else(|| "MCP service is not running".to_string())
+}
+
+#[tauri::command]
+pub fn mcp_status() -> Result<McpStatus, String> {
+    Ok(McpStatus {
+        enabled: service()?.enabled_status()?,
+    })
+}
+
+#[tauri::command]
+pub fn mcp_set_enabled(enabled: bool) -> Result<McpStatus, String> {
+    let service = service()?;
+    service.set_enabled(enabled)?;
+    Ok(McpStatus { enabled })
+}
+
+#[tauri::command]
+pub fn mcp_bridge_info() -> Result<McpBridgeInfo, String> {
+    let app_executable = std::env::current_exe()
+        .map_err(|error| format!("failed to resolve the running app executable: {error}"))?;
+    let app_directory = app_executable
+        .parent()
+        .ok_or_else(|| "running app executable has no parent directory".to_string())?;
+    let bridge_name = format!("xtermius-mcp-bridge{}", std::env::consts::EXE_SUFFIX);
+    let bridge_path = app_directory.join(bridge_name);
+
+    let environment = if is_packaged_app_executable(&app_executable) {
+        "packaged"
+    } else {
+        "development"
+    };
+
+    Ok(McpBridgeInfo {
+        executable_path: bridge_path.to_string_lossy().into_owned(),
+        environment,
+    })
+}
+
+fn is_packaged_app_executable(path: &std::path::Path) -> bool {
+    let mut saw_app_bundle = false;
+    let mut saw_contents = false;
+    let mut saw_macos_directory = false;
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy();
+        saw_app_bundle |= value.ends_with(".app");
+        saw_contents |= value == "Contents";
+        saw_macos_directory |= value == "MacOS";
+    }
+    saw_app_bundle && saw_contents && saw_macos_directory
 }
 
 #[tauri::command]
@@ -40,7 +109,7 @@ pub fn mcp_pair_client(label: Option<String>) -> Result<PairingCreated, String> 
     let (client_id, token) = service()?
         .auth
         .pair_client(label)
-        .ok_or("failed to create pairing")?;
+        .map_err(|error| format!("failed to persist pairing: {error}"))?;
     Ok(PairingCreated { client_id, token })
 }
 
@@ -51,11 +120,7 @@ pub fn mcp_list_clients() -> Result<Vec<crate::mcp::auth::PairedClientSummary>, 
 
 #[tauri::command]
 pub fn mcp_unpair_client(client_id: String) -> Result<(), String> {
-    let service = service()?;
-    service.auth.unpair(&client_id);
-    // Client session over: pending approvals from it must never execute.
-    service.tasks.cancel_client_pending(&client_id);
-    Ok(())
+    service()?.unpair_client(&client_id)
 }
 
 #[tauri::command]
@@ -79,6 +144,7 @@ pub fn mcp_list_connections() -> Result<Vec<McpConnectionView>, String> {
                 generation: record.generation,
                 host_name: record.host.hostname,
                 user: record.host.user,
+                port: record.host.port,
                 alias: record.host.alias,
                 state,
                 requires_reconnect,
@@ -92,37 +158,51 @@ pub fn mcp_list_connections() -> Result<Vec<McpConnectionView>, String> {
 #[tauri::command]
 pub fn mcp_grant_connection(client_id: String, connection_id: String) -> Result<bool, String> {
     let service = service()?;
-    let record = service
-        .registry
-        .get(&connection_id)
-        .ok_or("unknown connection")?;
-    if !record.mcp_eligible() {
-        if record.requires_reconnect_for_mcp() {
-            return Err("this connection predates managed reuse; reconnect it to enable MCP".into());
-        }
-        return Err("connection is closing or gone".into());
-    }
-    let grant_start = service.buffers.current_seq();
-    Ok(service
-        .auth
-        .grant_connection(&client_id, &connection_id, record.generation, grant_start)
-        .is_some())
+    service.set_client_connection_permissions(
+        &client_id,
+        &connection_id,
+        GrantPermissions::observe_only(),
+    )?;
+    Ok(true)
 }
 
 #[tauri::command]
 pub fn mcp_revoke_connection(client_id: String, connection_id: String) -> Result<bool, String> {
+    service()?.revoke_client_connection(&client_id, &connection_id)
+}
+
+#[tauri::command]
+pub fn mcp_set_grant_permissions(
+    client_id: String,
+    connection_id: String,
+    observe: bool,
+    execute: bool,
+) -> Result<(), String> {
     let service = service()?;
-    let revoked = service.auth.revoke(&client_id, &connection_id);
-    if revoked {
-        // Revocation must take effect on pending work immediately.
-        service.tasks.cancel_connection_tasks(&connection_id);
-    }
-    Ok(revoked)
+    service.set_client_connection_permissions(
+        &client_id,
+        &connection_id,
+        GrantPermissions { observe, execute },
+    )
 }
 
 #[tauri::command]
 pub fn mcp_pending_tasks() -> Result<Vec<crate::task_engine::TaskSnapshot>, String> {
-    Ok(service()?.tasks.pending_approvals())
+    service()?.pending_approvals()
+}
+
+/// Return a bounded, newest-first view of command metadata. Output is never
+/// included in the audit record or this Tauri response.
+#[tauri::command]
+pub fn mcp_recent_task_audit(
+    limit: Option<usize>,
+) -> Result<Vec<crate::mcp::audit::TaskAuditRecord>, String> {
+    if let Some(limit) = limit {
+        if !(1..=100).contains(&limit) {
+            return Err("audit limit must be between 1 and 100".to_string());
+        }
+    }
+    service()?.recent_task_audit(limit)
 }
 
 /// Approve the exact command captured when the task was submitted. The
@@ -130,24 +210,14 @@ pub fn mcp_pending_tasks() -> Result<Vec<crate::task_engine::TaskSnapshot>, Stri
 /// path re-verifies the mux before spawning — a stale approval cannot run.
 #[tauri::command]
 pub fn mcp_approve_task(task_id: String) -> Result<crate::task_engine::TaskSnapshot, String> {
-    let service = service()?;
-    let snapshot = service
-        .tasks
-        .internal_snapshot(&task_id)
-        .ok_or("unknown task")?;
-    let record = service
-        .registry
-        .get(&snapshot.connection_id)
-        .ok_or("connection is gone")?;
-    let approved = service
-        .tasks
-        .approve(&task_id, record.generation)
-        .map_err(|error| format!("approval failed: {error:?}"))?;
-    service.try_start(&task_id);
-    Ok(approved)
+    service()?.approve_task(&task_id)
 }
 
 #[tauri::command]
 pub fn mcp_reject_task(task_id: String) -> Result<bool, String> {
-    Ok(service()?.tasks.reject(&task_id).is_some())
+    service()?
+        .tasks
+        .reject(&task_id)
+        .map(|snapshot| snapshot.is_some())
+        .map_err(|_| "task rejection could not be recorded in the audit ledger".to_string())
 }

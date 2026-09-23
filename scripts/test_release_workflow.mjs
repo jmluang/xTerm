@@ -27,6 +27,22 @@ function assertIncludesAll(text, expected, context) {
   }
 }
 
+function releaseBuildJob(workflow) {
+  const start = workflow.indexOf("\n  build:\n");
+  const end = workflow.indexOf("\n  finalize_release:\n", start);
+  assert.notEqual(start, -1, "Expected release build job to exist");
+  assert.notEqual(end, -1, "Expected release finalizer to follow the build job");
+  return workflow.slice(start, end);
+}
+
+function namedStep(workflow, name) {
+  const marker = `      - name: ${name}`;
+  const start = workflow.indexOf(marker);
+  assert.notEqual(start, -1, `Expected workflow step ${name} to exist`);
+  const next = workflow.indexOf("\n      - name:", start + marker.length);
+  return workflow.slice(start, next === -1 ? undefined : next);
+}
+
 const failures = [];
 
 function check(name, fn) {
@@ -155,6 +171,85 @@ check("release workflow runs static release tests after syncing versions", () =>
     /EXPECTED_RELEASE_VERSION="\$\{RELEASE_VERSION\}"\s+npm run test:release-workflow/,
     "Release workflow must run release workflow tests with EXPECTED_RELEASE_VERSION after version sync"
   );
+});
+
+check("release runs Rust tests, warning-free clippy, and the frontend production build before tauri-action", () => {
+  const workflow = read(".github/workflows/release.yml");
+  const buildJob = releaseBuildJob(workflow);
+  const regressionStep = namedStep(buildJob, "Run release regression tests");
+  const publishStep = namedStep(buildJob, "Build and publish Tauri release");
+
+  assert.ok(
+    buildJob.indexOf("      - name: Run release regression tests") <
+      buildJob.indexOf("      - name: Build and publish Tauri release"),
+    "All release checks must finish before tauri-action can publish assets"
+  );
+  assert.match(
+    regressionStep,
+    /cargo test --locked --manifest-path src-tauri\/Cargo\.toml --lib --bins --tests/,
+    "Release workflow must run Rust library, binary, and integration tests"
+  );
+  assert.match(
+    regressionStep,
+    /cargo clippy --locked --manifest-path src-tauri\/Cargo\.toml --lib --bins -- -D warnings/,
+    "Release workflow must fail on Rust clippy warnings"
+  );
+  assert.match(regressionStep, /npm run build/, "Release workflow must run the TypeScript and frontend production build");
+  assert.match(publishStep, /uses:\s*tauri-apps\/tauri-action@/, "Expected tauri-action to remain the publishing step");
+});
+
+check("each release architecture forwards its bridge target to staging and tauri-action", () => {
+  const workflow = read(".github/workflows/release.yml");
+  const buildJob = releaseBuildJob(workflow);
+  const stageStep = namedStep(buildJob, "Stage MCP bridge sidecar");
+  const publishStep = namedStep(buildJob, "Build and publish Tauri release");
+  const tauriConfig = JSON.parse(read("src-tauri/tauri.conf.json"));
+  const bridgeScript = read("scripts/build_bridge_sidecar.mjs");
+  const matrixTarget = /XTERM_BRIDGE_TARGET:\s*\$\{\{\s*matrix\.target\s*\}\}/;
+
+  assert.match(stageStep, matrixTarget, "Sidecar staging must use the current matrix target");
+  assert.match(
+    publishStep,
+    matrixTarget,
+    "tauri-action beforeBuildCommand must receive the current matrix target when it rebuilds the bridge"
+  );
+  assert.match(
+    buildJob,
+    /- os:\s*macos-14\s*\n\s+target:\s*aarch64-apple-darwin[\s\S]*?- os:\s*macos-15-intel\s*\n\s+target:\s*x86_64-apple-darwin/,
+    "Release matrix must continue to build Apple Silicon and Intel targets"
+  );
+  assert.match(
+    tauriConfig.build?.beforeBuildCommand ?? "",
+    /npm run build:bridge/,
+    "tauri-action beforeBuildCommand must rebuild the sidecar that consumes XTERM_BRIDGE_TARGET"
+  );
+  assert.match(
+    bridgeScript,
+    /process\.env\.XTERM_BRIDGE_TARGET/,
+    "Sidecar build script must use XTERM_BRIDGE_TARGET passed by the release matrix"
+  );
+});
+
+check("local Playwright outputs are ignored and generated snapshots are absent", () => {
+  const gitignore = read(".gitignore");
+  assert.match(gitignore, /^\.playwright-mcp\/$/m, ".gitignore must exclude the Playwright MCP artifact directory");
+  assert.match(gitignore, /^output\/playwright\/$/m, ".gitignore must exclude generated Playwright output");
+  assert.doesNotMatch(gitignore, /^!docs\/COMPILATION\.md$/m, ".gitignore must not unignore the removed compilation notes");
+  assert.equal(
+    exists(".playwright-mcp/page-2026-04-19T15-43-03-823Z.yml"),
+    false,
+    "Tracked Playwright MCP page snapshot must be removed"
+  );
+  assert.equal(
+    exists("output/playwright/release-page-snapshot.md"),
+    false,
+    "Tracked Playwright release snapshot must be removed"
+  );
+});
+
+check("obsolete compilation notes are removed without removing superpowers documentation", () => {
+  assert.equal(exists("docs/COMPILATION.md"), false, "Obsolete compilation notes must be removed");
+  assert.equal(exists("docs/superpowers"), true, "Superpowers documentation must remain available");
 });
 
 check("release finalizer validates latest.json with jq against version, platform signatures, and release assets", () => {

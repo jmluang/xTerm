@@ -1,6 +1,11 @@
 use crate::pty::PtyState;
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+fn install_system_session_observer() {
+    crate::session_monitor::install();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     crate::init_mcp_service();
@@ -9,6 +14,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
+                install_system_session_observer();
+
                 use window_vibrancy::{
                     apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
                 };
@@ -53,12 +60,17 @@ pub fn run() {
             crate::pty::pty_resize,
             crate::pty::pty_kill,
             crate::mcp::commands::mcp_pair_client,
+            crate::mcp::commands::mcp_status,
+            crate::mcp::commands::mcp_set_enabled,
+            crate::mcp::commands::mcp_bridge_info,
             crate::mcp::commands::mcp_list_clients,
             crate::mcp::commands::mcp_unpair_client,
             crate::mcp::commands::mcp_list_connections,
             crate::mcp::commands::mcp_grant_connection,
+            crate::mcp::commands::mcp_set_grant_permissions,
             crate::mcp::commands::mcp_revoke_connection,
             crate::mcp::commands::mcp_pending_tasks,
+            crate::mcp::commands::mcp_recent_task_audit,
             crate::mcp::commands::mcp_approve_task,
             crate::mcp::commands::mcp_reject_task,
         ])

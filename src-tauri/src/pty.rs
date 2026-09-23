@@ -18,9 +18,16 @@ const AUTO_PASSWORD_ARM_SECONDS: u64 = 15;
 // PTY traffic for every open window (e.g. the settings window).
 const MAIN_WINDOW_LABEL: &str = "main";
 const PTY_READ_BUFFER_BYTES: usize = 64 * 1024;
+// A slow event emitter backpressures the PTY reader after at most this many
+// decoded chunks have queued; `send` blocks instead of dropping terminal data.
+const PTY_OUTPUT_QUEUE_CAPACITY: usize = 16;
 // Cap for how much decoded output a single pty:data event may carry when the
 // emitter coalesces backlogged chunks.
 const PTY_EMIT_MAX_BATCH_CHARS: usize = 1024 * 1024;
+
+fn pty_output_channel() -> (mpsc::SyncSender<String>, mpsc::Receiver<String>) {
+    mpsc::sync_channel(PTY_OUTPUT_QUEUE_CAPACITY)
+}
 
 struct PtyOutputDecoder {
     decoder: encoding_rs::Decoder,
@@ -386,13 +393,15 @@ async fn spawn_pty_command<R: Runtime>(
         sessions.insert(id.clone(), session.clone());
     }
 
-    // Reader thread: blocks on PTY read, decodes, and hands chunks to the
-    // emitter thread. Kept separate so slow event emission never stalls reads.
+    // Reader thread blocks on PTY read, decodes, and hands chunks to the
+    // emitter thread. A full bounded queue backpressures this reader instead
+    // of growing without bound or dropping terminal output. No session lock
+    // is held while the reader sends, and the emitter drains independently.
     let id_data = id.clone();
     let conn_buffer = connection_id.clone();
     let session_for_reader = session.clone();
     let mut output_decoder = PtyOutputDecoder::new(encoding.as_deref());
-    let (chunk_tx, chunk_rx) = mpsc::channel::<String>();
+    let (chunk_tx, chunk_rx) = pty_output_channel();
     let reader_handle = thread::spawn(move || {
         let mut buf = [0u8; PTY_READ_BUFFER_BYTES];
         let mut pending = Vec::new();
@@ -413,7 +422,7 @@ async fn spawn_pty_command<R: Runtime>(
                             if let (Some(service), Some(conn_id)) =
                                 (crate::mcp_service(), conn_for_branch)
                             {
-                                service.buffers.push(&conn_id, data_for_branch);
+                                service.capture_pty_output(&conn_id, data_for_branch);
                             }
                         }));
                         if chunk_tx.send(data).is_err() {
@@ -429,16 +438,16 @@ async fn spawn_pty_command<R: Runtime>(
             let conn_for_branch = conn_buffer.clone();
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if let (Some(service), Some(conn_id)) = (crate::mcp_service(), conn_for_branch) {
-                    service.buffers.push(&conn_id, data.clone());
+                    service.capture_pty_output(&conn_id, data.clone());
                 }
             }));
             let _ = chunk_tx.send(data);
         }
     });
 
-    // Emitter thread: coalesces whatever backlog accumulated while the
-    // previous emit was in flight into a single event. Adds no latency for
-    // interactive output; batches aggressively under heavy throughput.
+    // Emitter thread coalesces queued chunks into a single event. Interactive
+    // output remains immediate while the bounded queue has capacity; when
+    // event emission falls behind, the reader applies backpressure.
     let app_data = app.clone();
     let emitter_handle = thread::spawn(move || {
         while let Ok(first) = chunk_rx.recv() {
@@ -472,9 +481,7 @@ async fn spawn_pty_command<R: Runtime>(
         // Phase A lifecycle: mark the backend record exited first (grants and
         // derived channels stop being valid) before the UI sees the exit.
         if let Some(service) = crate::mcp_service() {
-            if let Some(record) = service.registry.mark_exited_by_session(&id_exit, code) {
-                service.on_connection_closed(&record.connection_id);
-            }
+            service.mark_connection_exited(&id_exit, code);
         }
         let _ = app_exit.emit_to(
             MAIN_WINDOW_LABEL,
@@ -659,9 +666,7 @@ pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> 
     // Phase A lifecycle: moving to Closing first stops new grants/derived
     // channels before the child is killed and before output tail cleanup.
     if let Some(service) = crate::mcp_service() {
-        if let Some(record) = service.registry.begin_close_by_session(&session_id) {
-            service.on_connection_closed(&record.connection_id);
-        }
+        service.begin_connection_close(&session_id);
     }
     let mut k = session.killer.lock().map_err(|_| "killer poisoned")?;
     k.kill().map_err(|e| e.to_string())?;
@@ -671,10 +676,13 @@ pub async fn pty_kill(session_id: String, state: tauri::State<'_, PtyState>) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_output_tail, extract_ready_output_chunks, parse_env_vars, AutoPasswordPromptMatcher,
-        AutoPasswordState, PtyOutputDecoder,
+        drain_output_tail, extract_ready_output_chunks, parse_env_vars, pty_output_channel,
+        AutoPasswordPromptMatcher, AutoPasswordState, PtyOutputDecoder, PTY_OUTPUT_QUEUE_CAPACITY,
     };
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::mpsc::TrySendError,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn keeps_split_utf8_sequence_until_complete() {
@@ -793,5 +801,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn pty_reader_output_queue_is_bounded_and_backpressured() {
+        let (sender, receiver) = pty_output_channel();
+        for index in 0..PTY_OUTPUT_QUEUE_CAPACITY {
+            sender.send(index.to_string()).unwrap();
+        }
+
+        let pending = match sender.try_send("pending".to_string()) {
+            Err(TrySendError::Full(chunk)) => chunk,
+            Err(TrySendError::Disconnected(_)) => panic!("PTY emitter disconnected"),
+            Ok(()) => panic!("PTY queue accepted more than its configured capacity"),
+        };
+        assert_eq!(receiver.recv().unwrap(), "0");
+        sender.send(pending).unwrap();
+
+        let received: Vec<String> = receiver.try_iter().collect();
+        let expected: Vec<String> = (1..PTY_OUTPUT_QUEUE_CAPACITY)
+            .map(|index| index.to_string())
+            .chain(std::iter::once("pending".to_string()))
+            .collect();
+        assert_eq!(received, expected);
     }
 }

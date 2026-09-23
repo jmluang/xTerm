@@ -13,6 +13,10 @@ pnpm-debug.log*
 # Vite cache
 .vite/
 
+# Browser automation snapshots
+.playwright-mcp/
+output/playwright/
+
 # Tauri / Rust
 src-tauri/target/
 
@@ -21,7 +25,7 @@ src-tauri/target/
 .vscode/
 
 docs/*
-!docs/COMPILATION.md
+!docs/MCP.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/plans/
