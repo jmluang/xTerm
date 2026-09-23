@@ -44,7 +44,7 @@ pub fn ssh_config_scan_importable_hosts() -> Result<Vec<SshImportCandidate>, Str
         }
     }
 
-    candidates.sort_by(|a, b| a.alias.to_lowercase().cmp(&b.alias.to_lowercase()));
+    candidates.sort_by_key(|candidate| candidate.alias.to_lowercase());
     Ok(candidates)
 }
 

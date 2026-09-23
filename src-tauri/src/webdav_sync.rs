@@ -127,7 +127,7 @@ async fn webdav_ensure_remote_folder(
         return Err(format!(
             "Failed to create remote directory: {status} ({}) ({})",
             cur.as_str(),
-            &body.chars().take(180).collect::<String>()
+            body.chars().take(180).collect::<String>()
         ));
     }
 
@@ -226,7 +226,7 @@ pub async fn webdav_pull() -> Result<(), String> {
         }
         return Err(format!(
             "Pull failed: {db_status} ({})",
-            &body.chars().take(180).collect::<String>()
+            body.chars().take(180).collect::<String>()
         ));
     }
 
@@ -255,7 +255,7 @@ pub async fn webdav_pull() -> Result<(), String> {
     }
     Err(format!(
         "Pull failed: {status} ({})",
-        &body.chars().take(180).collect::<String>()
+        body.chars().take(180).collect::<String>()
     ))
 }
 
@@ -306,7 +306,7 @@ pub async fn webdav_push() -> Result<(), String> {
         }
         return Err(format!(
             "Push failed: {status} ({url_db}) ({})",
-            &body.chars().take(180).collect::<String>()
+            body.chars().take(180).collect::<String>()
         ));
     }
 
@@ -321,7 +321,7 @@ pub async fn webdav_push() -> Result<(), String> {
         }
         return Err(format!(
             "Push failed (hosts.json): {status} ({url_json}) ({})",
-            &body.chars().take(180).collect::<String>()
+            body.chars().take(180).collect::<String>()
         ));
     }
 

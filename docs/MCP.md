@@ -175,7 +175,8 @@ OpenCode local MCP command shape was checked against the installed `opencode 1.1
 - 打包后的 macOS bridge 位于 `xTermius.app/Contents/MacOS/xtermius-mcp-bridge`，与 app 一起签名；本机既有验证记录包含 `codesign --verify --deep`。
 - `beforeBuildCommand` 已串联 frontend 与 bridge 构建；CI release workflow 为每个矩阵 target 传递 bridge target。
 - 本轮在 Intel Mac 本地构建了 x86_64 与 `aarch64-apple-darwin` 两份 `.app`，两份 `codesign --verify --deep --strict` 均通过，主 app 与 bridge 架构分别匹配。arm64 app 无法在当前 Intel 主机运行。
-- `tauri build --bundles app` 在两种架构上都完成 app bundle 与 `.app.tar.gz` 后，因本机未注入 `TAURI_SIGNING_PRIVATE_KEY` 而以 updater artifact 步骤退出；发布签名需由 CI secrets 完成。没有创建 tag 或触发 release workflow。
+- `tauri build --bundles app` 在两种架构上都完成 app bundle 与 `.app.tar.gz` 后，因本机未注入 `TAURI_SIGNING_PRIVATE_KEY` 而以 updater artifact 步骤退出；发布签名需由 CI secrets 完成。
+- `v0.3.7` tag 与 `feat/mcp-v1` 分支已推送。首次 [release CI run](https://github.com/jmluang/xTerm/actions/runs/35867860471) 中，macOS arm64 sidecar 构建及 Rust 测试通过；release gate 的 Clippy 1.98 检出 1 条 `unnecessary_sort_by` 和 5 条 `useless_borrows_in_formatting`，未进入 app bundle 构建。该失败已由本次后续提交修正；v0.3.7 tag 保留不变。
 
 ## 本轮性能基线
 
@@ -192,13 +193,13 @@ Release-only ignored Rust baselines（逻辑 256 MiB 输出，8 个连接、read
 
 | 验收项 | 当前记录 |
 | --- | --- |
-| 后端单元/针对 MCP 的状态、授权、fail-closed、audit 测试 | `cargo test --locked`：135 lib passed + 2 ignored，4 bridge unit + 2 credentials integration passed；另有 2 个显式 ignored performance baselines 已单独 release-run |
+| 后端单元/针对 MCP 的状态、授权、fail-closed、audit 测试 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --tests`：137 lib passed + 2 ignored，4 bridge unit + 2 credentials integration passed；另有 2 个显式 ignored performance baselines 已单独 release-run |
 | 真实 OpenSSH fail-closed 门槛 | 已有上表 T1–T5 记录 |
 | Claude Code + OpenCode 本地 stdio 健康检查 | 两 CLI 均报告签名 bridge connected；本轮未调用工具或模型，完整 tool-call E2E 待做 |
 | MCP 关闭/空闲性能 | 本轮 app RSS/CPU 样本见上表 |
 | 持续真实 SSH 输出性能 | 尚未测；GUI 合成输入受系统权限限制 |
 | macOS x86_64 + arm64 本地 app bundle / deep signature | 两份 app 均构建成功，签名验证通过；arm64 仅作交叉构建验证 |
-| macOS 双架构 release CI 构建 | 本轮未触发；需要指定 release tag，不能标记 CI 通过 |
+| macOS 双架构 release CI 构建 | v0.3.7 首轮未通过（见上方 run）；已修正 Clippy 阻塞，新的 release tag 尚待 CI 复验，暂不能标记双架构通过 |
 | app 设置页 pairing/config UI 与 audit command | 功能与命令已实现；真实 GUI pairing/copy/dismiss/approval 流程仍待人工或获授权 GUI 验收 |
 
 ## 文档状态纠正
