@@ -177,6 +177,7 @@ OpenCode local MCP command shape was checked against the installed `opencode 1.1
 - 本轮在 Intel Mac 本地构建了 x86_64 与 `aarch64-apple-darwin` 两份 `.app`，两份 `codesign --verify --deep --strict` 均通过，主 app 与 bridge 架构分别匹配。arm64 app 无法在当前 Intel 主机运行。
 - `tauri build --bundles app` 在两种架构上都完成 app bundle 与 `.app.tar.gz` 后，因本机未注入 `TAURI_SIGNING_PRIVATE_KEY` 而以 updater artifact 步骤退出；发布签名需由 CI secrets 完成。
 - `v0.3.7` tag 与 `feat/mcp-v1` 分支已推送。首次 [release CI run](https://github.com/jmluang/xTerm/actions/runs/35867860471) 中，macOS arm64 sidecar 构建及 Rust 测试通过；release gate 的 Clippy 1.98 检出 1 条 `unnecessary_sort_by` 和 5 条 `useless_borrows_in_formatting`，未进入 app bundle 构建。该失败已由本次后续提交修正；v0.3.7 tag 保留不变。
+- [v0.3.8 release CI run](https://github.com/jmluang/xTerm/actions/runs/35870920481) 的 macOS arm64、x86_64 构建及 `finalize_release` 均通过，正式 release 已发布，包含两种架构的 DMG、app archive、签名和 `latest.json`。
 
 ## 本轮性能基线
 
@@ -199,7 +200,7 @@ Release-only ignored Rust baselines（逻辑 256 MiB 输出，8 个连接、read
 | MCP 关闭/空闲性能 | 本轮 app RSS/CPU 样本见上表 |
 | 持续真实 SSH 输出性能 | 尚未测；GUI 合成输入受系统权限限制 |
 | macOS x86_64 + arm64 本地 app bundle / deep signature | 两份 app 均构建成功，签名验证通过；arm64 仅作交叉构建验证 |
-| macOS 双架构 release CI 构建 | v0.3.7 首轮未通过（见上方 run）；已修正 Clippy 阻塞，新的 release tag 尚待 CI 复验，暂不能标记双架构通过 |
+| macOS 双架构 release CI 构建 | v0.3.8 的 macOS arm64、x86_64 build 与 release finalizer 全部成功；[release](https://github.com/jmluang/xTerm/releases/tag/v0.3.8) 已发布 |
 | app 设置页 pairing/config UI 与 audit command | 功能与命令已实现；真实 GUI pairing/copy/dismiss/approval 流程仍待人工或获授权 GUI 验收 |
 
 ## 文档状态纠正
