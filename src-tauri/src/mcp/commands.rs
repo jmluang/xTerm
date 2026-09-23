@@ -187,6 +187,15 @@ pub fn mcp_set_grant_permissions(
 }
 
 #[tauri::command]
+pub fn mcp_set_auto_approve(
+    client_id: String,
+    connection_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    service()?.set_client_auto_approve_commands(&client_id, &connection_id, enabled)
+}
+
+#[tauri::command]
 pub fn mcp_pending_tasks() -> Result<Vec<crate::task_engine::TaskSnapshot>, String> {
     service()?.pending_approvals()
 }

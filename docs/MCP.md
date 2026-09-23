@@ -46,9 +46,9 @@ MCP 工具不会返回或写入 pairing token、SSH 密码或私钥；获得 Exe
 ## 默认关闭、分权与风险提示
 
 - MCP 默认关闭。关闭时不接受 agent IPC；关闭操作会撤销 operation grants、取消 task 并清空观察缓存。
-- Observe 与 Execute 独立授权：Observe 只读取该连接 grant 起始点之后的终端输出；Execute 允许提交命令，但每一条命令仍须人工审批。
+- Observe 与 Execute 独立授权：Observe 只读取该连接 grant 起始点之后的终端输出；Execute 允许提交命令，默认逐条人工审批。用户也可对特定配对 client + 当前连接代次启用 session trust，后续新命令自动审批。
 - Observe 会把终端数据发送给外部模型；xTermius 无法保证检测出 secret。不要对含有不能外发内容的会话开启 Observe。
-- Execute 使用现有 SSH account 的权限，可能是 root 权限。审批不是权限降级，也不是 shell sandbox。
+- Execute 使用现有 SSH account 的权限，可能是 root 权限。逐条审批和 session trust 都不是权限降级，也不是 shell sandbox；启用 session trust 后该 client 在该连接上的命令不再逐条弹窗。
 - 审批面板和审计记录显示 `working_directory`、timeout 和 approval expiry。V1 working directory 固定为 SSH login directory，省略时默认 `login`；approval window 为 5 分钟；timeout 范围为 1–1800 秒，默认 300 秒。
 
 ## 连接、授权与任务生命周期
@@ -56,6 +56,8 @@ MCP 工具不会返回或写入 pairing token、SSH 密码或私钥；获得 Exe
 连接只有通过受管 OpenSSH master 的 `-O check` 后才进入 `ready`。密码、指纹或 MFA 提示期间保持 `connecting`，设置页不会允许为非 `ready` 连接勾选权限。
 
 grant 是具体连接代次的授权。重连、关闭、退出、撤销或 client transport EOF 都会使旧 grant 失效；需要用户重新为新连接代次授权。
+
+session trust 是内存态设置，绑定 paired client、连接 ID 和当前 generation。断开/重连、撤销 grant、关闭 Execute、关闭 MCP、系统锁定/切换 session、client transport EOF 或 app 重启都会清除；只修改同一代次 grant 的 Observe 权限时会保留。已有 task 不会因关闭 trust 而回滚。开启后仅之后提交的新 task 会自动审批；已在等待中的 task 仍需逐条处理。自动审批来源写入 task audit detail。
 
 命令参数在 `run_command` 时捕获并写入审计，approval 不接受另一份命令或参数。task 状态包括：
 
@@ -83,7 +85,8 @@ grant 是具体连接代次的授权。重连、关闭、退出、撤销或 clie
 | Task read | 单次 `read_task` 的 stdout+stderr 共 32 KiB UTF-8 bytes，stdout/stderr 使用独立 byte cursor |
 | Pending approvals | 每 client 8 个，全局 32 个 |
 | Retained tasks | 最多 256 个 task；active task 不会被 cap sweep 删除 |
-| Approval expiry | 5 分钟；过期转为 `rejected` |
+| Manual approval expiry | 5 分钟；过期转为 `rejected` |
+| Session trust | 默认关闭；按 client + connection generation opt-in；仅内存态，随当前授权 session 清除 |
 | Command timeout | 1–1800 秒，默认 300 秒；working directory 固定为 `login` |
 | Audit retention | 保留最近 30 天，最多 10,000 条；active audit row 不因 cap 删除 |
 

@@ -245,6 +245,50 @@ function assertMcpSettingsPreviewAndInitialRoute() {
   );
 }
 
+function assertMcpSessionTrustIsExplicitAndScoped() {
+  const app = read("src-tauri/src/app.rs");
+  const commands = read("src-tauri/src/mcp/commands.rs");
+  const service = read("src-tauri/src/mcp/service.rs");
+  const taskEngine = read("src-tauri/src/task_engine.rs");
+  const mcpPanel = read("src/components/mcp/McpPanel.tsx");
+
+  assertMatch(
+    app,
+    /mcp_set_auto_approve/,
+    "The explicit session-trust command must be registered in Tauri",
+  );
+  assertMatch(
+    commands,
+    /mcp_set_auto_approve[\s\S]*set_client_auto_approve_commands/,
+    "The session-trust command must use the guarded service operation",
+  );
+  assertMatch(
+    service,
+    /auto_approve_at_submit[\s\S]*grant\.auto_approve/,
+    "Auto-approval must require both submit-time and current-generation trust",
+  );
+  assertMatch(
+    taskEngine,
+    /auto-approved under connection-session trust/,
+    "Automated approval must be distinguishable in the task audit detail",
+  );
+  assertMatch(
+    mcpPanel,
+    /mcp_set_auto_approve/,
+    "The settings panel must expose the opt-in session-trust control",
+  );
+  assertMatch(
+    mcpPanel,
+    /Trust SSH session/,
+    "The UI must make clear that auto-approval is scoped to an SSH session",
+  );
+  assertMatch(
+    mcpPanel,
+    /session trust ends when this connection closes or reconnects/i,
+    "The UI must explain the trust reset boundary",
+  );
+}
+
 assertPackageScript();
 assertBellStyleReachesXterm();
 assertMetricsDockGatesLivePolling();
@@ -255,5 +299,6 @@ assertLowRiskReviewRegressions();
 assertToastA11y();
 assertSessionTabsA11y();
 assertMcpSettingsPreviewAndInitialRoute();
+assertMcpSessionTrustIsExplicitAndScoped();
 
 console.log("Frontend regressions verified");

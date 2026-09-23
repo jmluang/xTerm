@@ -9,6 +9,7 @@ export type McpGrantSummary = {
   generation: number;
   observe: boolean;
   execute: boolean;
+  autoApprove: boolean;
 };
 
 export type McpClientSummary = {
@@ -73,7 +74,7 @@ const APPROVAL_WINDOW_MS = 5 * 60 * 1000;
 
 const WARNING_TEXT =
   "Observe sends terminal data to an external model; xTermius cannot guarantee secret detection. " +
-  "Execute uses this SSH account's full privileges (which may be root), and every command still waits for approval.";
+  "Execute uses this SSH account's full privileges (which may be root). Session trust skips per-command prompts for the selected client and connection.";
 
 function visibleControls(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu, (character) => {
@@ -235,6 +236,27 @@ export function McpPanel() {
     }
   }
 
+  async function setAutoApprove(
+    client: McpClientSummary,
+    connection: McpConnectionView,
+    enabled: boolean,
+  ) {
+    const key = `${client.clientId}:${connection.connectionId}`;
+    setUpdatingGrant(key);
+    try {
+      await invoke("mcp_set_auto_approve", {
+        clientId: client.clientId,
+        connectionId: connection.connectionId,
+        enabled,
+      });
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setUpdatingGrant(null);
+    }
+  }
+
   async function decide(taskId: string, approve: boolean) {
     try {
       await invoke(approve ? "mcp_approve_task" : "mcp_reject_task", { taskId });
@@ -301,7 +323,7 @@ export function McpPanel() {
             <h2 className="text-lg font-semibold">MCP access</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               Local MCP clients can only use connections and permissions you explicitly enable.
-              Command requests always wait for approval.
+              Commands ask for approval by default; session trust can skip prompts for one client and connection.
             </p>
             <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
               {WARNING_TEXT} Never enable Observe for a session containing data you cannot send to an external model.
@@ -509,7 +531,12 @@ export function McpPanel() {
             <div>
               <h2 className="text-sm font-medium">Connection permissions</h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                Observe reads new connection output. Execute allows approved command requests and task controls.
+                Observe reads new connection output. Execute allows command requests; they ask for approval by default.
+                Enable session trust per client and connection to skip prompts for new commands.
+              </p>
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                Session trust ends when this connection closes or reconnects, permissions are revoked, MCP is disabled,
+                the agent bridge disconnects, the system locks, or xTermius exits. Commands already approved or running are not rolled back.
               </p>
             </div>
             {connections.length === 0 ? (
@@ -553,7 +580,7 @@ export function McpPanel() {
                               <span className="min-w-0 break-words">
                                 {visibleControls(client.label?.trim() || client.clientId)}
                               </span>
-                              <div className="flex items-center gap-4">
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                                 <label className="flex items-center gap-1.5">
                                   <input
                                     type="checkbox"
@@ -578,7 +605,26 @@ export function McpPanel() {
                                   />
                                   <span>Execute</span>
                                 </label>
+                                {grant?.execute && (
+                                  <label className="flex items-center gap-1.5">
+                                    <input
+                                      type="checkbox"
+                                      checked={grant.autoApprove}
+                                      disabled={updating || updatingGrant !== null}
+                                      aria-label={`Auto-approve commands on ${sshTarget(connection)} for ${clientLabel(client, client.clientId)}`}
+                                      onChange={(event) =>
+                                        void setAutoApprove(client, connection, event.target.checked)
+                                      }
+                                    />
+                                    <span>Trust SSH session</span>
+                                  </label>
+                                )}
                               </div>
+                              {grant?.autoApprove && (
+                                <div className="basis-full text-xs text-amber-600 dark:text-amber-400">
+                                  New commands from this client on this connection run without a per-command prompt.
+                                </div>
+                              )}
                             </div>
                           );
                         })}

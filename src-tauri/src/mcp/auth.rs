@@ -77,6 +77,8 @@ pub struct ConnectionGrant {
     pub grant_start_seq: u64,
     pub observe: bool,
     pub execute: bool,
+    /// Session-only opt-in. Never persisted and scoped to this grant generation.
+    pub auto_approve: bool,
     pub created_at_ms: u64,
 }
 
@@ -503,6 +505,15 @@ impl AuthState {
         if !inner.clients.contains_key(client_id) {
             return Err("unknown paired client".into());
         }
+        let auto_approve = inner
+            .grants
+            .get(&(client_id.to_string(), connection_id.to_string()))
+            .is_some_and(|grant| {
+                grant.generation == generation
+                    && grant.execute
+                    && permissions.execute
+                    && grant.auto_approve
+            });
         let grant = ConnectionGrant {
             grant_id: uuid::Uuid::new_v4().to_string(),
             client_id: client_id.to_string(),
@@ -511,6 +522,7 @@ impl AuthState {
             grant_start_seq,
             observe: permissions.observe,
             execute: permissions.execute,
+            auto_approve,
             created_at_ms: now_ms(),
         };
         let key = (client_id.to_string(), connection_id.to_string());
@@ -539,6 +551,15 @@ impl AuthState {
         if !inner.clients.contains_key(client_id) {
             return Err("unknown paired client".into());
         }
+        let auto_approve = inner
+            .grants
+            .get(&(client_id.to_string(), connection_id.to_string()))
+            .is_some_and(|grant| {
+                grant.generation == generation
+                    && grant.execute
+                    && permissions.execute
+                    && grant.auto_approve
+            });
         drop(inner);
         Ok(ConnectionGrant {
             grant_id: uuid::Uuid::new_v4().to_string(),
@@ -548,8 +569,33 @@ impl AuthState {
             grant_start_seq,
             observe: permissions.observe,
             execute: permissions.execute,
+            auto_approve,
             created_at_ms: now_ms(),
         })
+    }
+
+    /// Enable or disable command auto-approval for one live execute grant.
+    /// This bit is deliberately in-memory only and cannot survive a restart.
+    pub(crate) fn set_auto_approve_commands(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+        generation: u64,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "MCP auth state poisoned")?;
+        let grant = inner
+            .grants
+            .get_mut(&(client_id.to_string(), connection_id.to_string()))
+            .ok_or_else(|| "no active connection permission exists for this client".to_string())?;
+        if grant.generation != generation {
+            return Err("connection permission belongs to a previous connection session".into());
+        }
+        if enabled && !grant.execute {
+            return Err("auto-approval requires Execute permission".into());
+        }
+        grant.auto_approve = enabled;
+        Ok(())
     }
 
     pub(crate) fn persist_prepared_grant(&self, grant: &ConnectionGrant) -> Result<(), String> {
@@ -778,6 +824,7 @@ impl AuthState {
                                 generation: grant.generation,
                                 observe: grant.observe,
                                 execute: grant.execute,
+                                auto_approve: grant.auto_approve,
                             })
                             .collect(),
                     })
@@ -803,6 +850,7 @@ pub struct ConnectionGrantSummary {
     pub generation: u64,
     pub observe: bool,
     pub execute: bool,
+    pub auto_approve: bool,
 }
 
 #[cfg(test)]
@@ -826,7 +874,19 @@ mod tests {
         let (client_id, token) = {
             let auth = AuthState::open(&db).unwrap();
             let (client_id, token) = auth.pair_client(Some("claude".into())).unwrap();
-            auth.grant_connection(&client_id, "conn-1", 7, 42).unwrap();
+            auth.set_grant_permissions(
+                &client_id,
+                "conn-1",
+                7,
+                42,
+                GrantPermissions {
+                    observe: true,
+                    execute: true,
+                },
+            )
+            .unwrap();
+            auth.set_auto_approve_commands(&client_id, "conn-1", 7, true)
+                .unwrap();
             (client_id, token)
         };
 
@@ -1210,6 +1270,71 @@ mod tests {
                 .unwrap_err(),
             AuthError::NoGrant
         );
+    }
+
+    #[test]
+    fn command_session_trust_requires_execute_and_is_generation_scoped() {
+        let auth = AuthState::default();
+        let (client_id, _) = auth.pair_client(None).unwrap();
+        auth.set_grant_permissions(&client_id, "conn1", 7, 42, GrantPermissions::observe_only())
+            .unwrap();
+        assert!(auth
+            .set_auto_approve_commands(&client_id, "conn1", 7, true)
+            .is_err());
+
+        let execute = auth
+            .set_grant_permissions(
+                &client_id,
+                "conn1",
+                7,
+                42,
+                GrantPermissions {
+                    observe: true,
+                    execute: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!execute.auto_approve);
+
+        auth.set_auto_approve_commands(&client_id, "conn1", 7, true)
+            .unwrap();
+        assert!(auth.list_clients()[0].grants[0].auto_approve);
+
+        // Editing other permissions keeps trust for the same live generation.
+        let edited = auth
+            .set_grant_permissions(
+                &client_id,
+                "conn1",
+                7,
+                42,
+                GrantPermissions {
+                    observe: false,
+                    execute: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(edited.auto_approve);
+
+        // A reconnect generation never inherits the previous session's trust.
+        let reconnected = auth
+            .set_grant_permissions(
+                &client_id,
+                "conn1",
+                8,
+                0,
+                GrantPermissions {
+                    observe: true,
+                    execute: true,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!reconnected.auto_approve);
+        assert!(auth
+            .set_auto_approve_commands(&client_id, "conn1", 7, true)
+            .is_err());
     }
 
     #[test]

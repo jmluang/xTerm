@@ -315,6 +315,33 @@ impl McpService {
         Ok(())
     }
 
+    /// Toggle per-command approval for one paired client on the current SSH
+    /// connection generation. This trust bit is memory-only and only carries
+    /// across a same-generation permission edit that keeps Execute enabled.
+    pub fn set_client_auto_approve_commands(
+        &self,
+        client_id: &str,
+        connection_id: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let _gate = self
+            .access_gate
+            .write()
+            .map_err(|_| "MCP access gate poisoned")?;
+        if !self.auth.is_enabled() {
+            return Err("MCP is disabled".into());
+        }
+        let record = self
+            .registry
+            .get(connection_id)
+            .ok_or("unknown connection")?;
+        if !record.mcp_eligible() || record.state != ConnectionState::Ready {
+            return Err("connection is closing or gone".into());
+        }
+        self.auth
+            .set_auto_approve_commands(client_id, connection_id, record.generation, enabled)
+    }
+
     pub fn revoke_client_connection(
         &self,
         client_id: &str,
@@ -968,9 +995,19 @@ impl McpService {
                 "the connection grant changed while the request was being recorded",
             );
         }
+        match self.auto_approve_task_if_trusted(client_id, &snapshot.task_id) {
+            Ok(Some(_)) | Ok(None) => {}
+            Err(message) => {
+                return IpcResponse::error("audit_unavailable", message);
+            }
+        }
         // If the task already exists (idempotent retry) and was approved
         // meanwhile, make sure it is actually started.
-        if snapshot.status == TaskStatus::Queued {
+        if self
+            .tasks
+            .internal_snapshot(&snapshot.task_id)
+            .is_some_and(|task| task.status == TaskStatus::Queued)
+        {
             if let Err(message) = self.try_start_task(&snapshot.task_id) {
                 return IpcResponse::error("dispatch_failed", message);
             }
@@ -983,6 +1020,62 @@ impl McpService {
             task_id: current.task_id,
             status: task_status_name(current.status).to_string(),
         })
+    }
+
+    /// Auto-approve a newly submitted task only while the exact client,
+    /// Execute grant, connection generation, and explicit session-trust bit
+    /// are still current. Holding the read side of the access gate makes this
+    /// approval serialize with grant revocation and trust changes.
+    fn auto_approve_task_if_trusted(
+        &self,
+        client_id: &str,
+        task_id: &str,
+    ) -> Result<Option<crate::task_engine::TaskSnapshot>, String> {
+        let _gate = self
+            .access_gate
+            .read()
+            .map_err(|_| "MCP access gate poisoned")?;
+        if !self.auth.is_enabled() {
+            return Ok(None);
+        }
+        let Some(snapshot) = self.tasks.internal_snapshot(task_id) else {
+            return Ok(None);
+        };
+        if snapshot.client_id != client_id || snapshot.status != TaskStatus::PendingApproval {
+            return Ok(None);
+        }
+        if !self.tasks.auto_approve_at_submit(task_id) {
+            return Ok(None);
+        }
+        let Some(record) = self.registry.get(&snapshot.connection_id) else {
+            return Ok(None);
+        };
+        if record.state != ConnectionState::Ready || record.generation != snapshot.generation {
+            return Ok(None);
+        }
+        let Ok(grant) = self.auth.current_grant(
+            client_id,
+            &snapshot.connection_id,
+            record.generation,
+            GrantPermission::Execute,
+        ) else {
+            return Ok(None);
+        };
+        if !grant.auto_approve || !self.tasks.grant_matches_task(client_id, task_id, &grant) {
+            return Ok(None);
+        }
+        match self.tasks.auto_approve(task_id, record.generation) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(crate::task_engine::ApprovalError::AuditUnavailable) => {
+                Err("automatic approval could not be recorded; no command was dispatched".into())
+            }
+            Err(
+                crate::task_engine::ApprovalError::ConnectionBusy
+                | crate::task_engine::ApprovalError::Expired
+                | crate::task_engine::ApprovalError::NotApprovable
+                | crate::task_engine::ApprovalError::StaleGeneration,
+            ) => Ok(None),
+        }
     }
 
     fn try_start_task(&self, task_id: &str) -> Result<(), String> {
@@ -2866,6 +2959,117 @@ mod tests {
             panic!("expected run accepted");
         };
         assert_eq!(run.task_id, run2.task_id);
+    }
+
+    #[test]
+    fn connection_session_trust_auto_approves_only_tasks_submitted_after_trust() {
+        let (service, connection_id, generation) = service_with_connection();
+        let (manual_client, _) = service.auth.pair_client(Some("manual".into())).unwrap();
+        let (trusted_client, _) = service.auth.pair_client(Some("trusted".into())).unwrap();
+        grant_execution(&service, &manual_client, &connection_id, generation, 0);
+        grant_execution(&service, &trusted_client, &connection_id, generation, 0);
+        let record = service.registry.get(&connection_id).unwrap();
+
+        let manual_grant = service
+            .auth
+            .current_grant(
+                &manual_client,
+                &connection_id,
+                generation,
+                GrantPermission::Execute,
+            )
+            .unwrap();
+        let submitted_before_trust = service
+            .tasks
+            .submit(
+                &manual_client,
+                &record,
+                CommandSpec {
+                    request_id: "manual-before-trust",
+                    command: "id",
+                    working_directory: "login",
+                    timeout_seconds: 300,
+                },
+                &manual_grant,
+            )
+            .unwrap();
+        service
+            .set_client_auto_approve_commands(&manual_client, &connection_id, true)
+            .unwrap();
+        assert!(service
+            .auto_approve_task_if_trusted(&manual_client, &submitted_before_trust.task_id)
+            .unwrap()
+            .is_none());
+
+        service
+            .set_client_auto_approve_commands(&trusted_client, &connection_id, true)
+            .unwrap();
+        let trusted_grant = service
+            .auth
+            .current_grant(
+                &trusted_client,
+                &connection_id,
+                generation,
+                GrantPermission::Execute,
+            )
+            .unwrap();
+        let submitted_after_trust = service
+            .tasks
+            .submit(
+                &trusted_client,
+                &record,
+                CommandSpec {
+                    request_id: "auto-after-trust",
+                    command: "id",
+                    working_directory: "login",
+                    timeout_seconds: 300,
+                },
+                &trusted_grant,
+            )
+            .unwrap();
+        let auto_approved = service
+            .auto_approve_task_if_trusted(&trusted_client, &submitted_after_trust.task_id)
+            .unwrap()
+            .expect("trusted submissions should be approved without a UI click");
+        assert_eq!(auto_approved.status, TaskStatus::Queued);
+        assert_eq!(
+            auto_approved.detail.as_deref(),
+            Some("auto-approved under connection-session trust")
+        );
+        assert!(auto_approved.approved_at_ms.is_some());
+        assert_eq!(service.tasks.pending_approvals().unwrap().len(), 1);
+
+        service
+            .set_client_auto_approve_commands(&trusted_client, &connection_id, false)
+            .unwrap();
+        let untrusted_grant = service
+            .auth
+            .current_grant(
+                &trusted_client,
+                &connection_id,
+                generation,
+                GrantPermission::Execute,
+            )
+            .unwrap();
+        let submitted_after_revoke = service
+            .tasks
+            .submit(
+                &trusted_client,
+                &record,
+                CommandSpec {
+                    request_id: "manual-after-untrust",
+                    command: "id",
+                    working_directory: "login",
+                    timeout_seconds: 300,
+                },
+                &untrusted_grant,
+            )
+            .unwrap();
+        assert!(service
+            .auto_approve_task_if_trusted(&trusted_client, &submitted_after_revoke.task_id)
+            .unwrap()
+            .is_none());
+        assert_eq!(service.tasks.pending_approvals().unwrap().len(), 2);
     }
 
     #[test]

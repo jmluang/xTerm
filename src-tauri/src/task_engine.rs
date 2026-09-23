@@ -298,6 +298,8 @@ pub struct CommandSpec<'a> {
 struct Task {
     snapshot: TaskSnapshot,
     grant_scope: GrantScope,
+    /// Captured once at submission so retries cannot inherit a later trust change.
+    auto_approve_at_submit: bool,
     dispatch_recorded: bool,
     stdout: TaskOutputBuffer,
     stderr: TaskOutputBuffer,
@@ -537,6 +539,7 @@ impl TaskEngine {
                     let task = Task {
                         snapshot: snapshot.clone(),
                         grant_scope,
+                        auto_approve_at_submit: false,
                         dispatch_recorded: snapshot.started_at_ms.is_some(),
                         stdout: TaskOutputBuffer::default(),
                         stderr: TaskOutputBuffer::default(),
@@ -560,6 +563,7 @@ impl TaskEngine {
         let task = Task {
             snapshot,
             grant_scope,
+            auto_approve_at_submit: grant.auto_approve,
             dispatch_recorded: false,
             stdout: TaskOutputBuffer::default(),
             stderr: TaskOutputBuffer::default(),
@@ -752,6 +756,14 @@ impl TaskEngine {
         self.get_task_by_id(task_id)
     }
 
+    pub(crate) fn auto_approve_at_submit(&self, task_id: &str) -> bool {
+        self.tasks
+            .lock()
+            .ok()
+            .and_then(|tasks| tasks.get(task_id).map(|task| task.auto_approve_at_submit))
+            .unwrap_or(false)
+    }
+
     /// Read a task, enforcing ownership: a client can only ever see its own
     /// tasks.
     pub fn get_task_for_client(&self, client_id: &str, task_id: &str) -> Option<TaskSnapshot> {
@@ -859,6 +871,29 @@ impl TaskEngine {
         task_id: &str,
         current_generation: u64,
     ) -> Result<TaskSnapshot, ApprovalError> {
+        self.approve_with_detail(task_id, current_generation, None)
+    }
+
+    /// Approve without a click because the user enabled connection-session
+    /// trust for this paired client. The reason is preserved in the task audit.
+    pub fn auto_approve(
+        &self,
+        task_id: &str,
+        current_generation: u64,
+    ) -> Result<TaskSnapshot, ApprovalError> {
+        self.approve_with_detail(
+            task_id,
+            current_generation,
+            Some("auto-approved under connection-session trust"),
+        )
+    }
+
+    fn approve_with_detail(
+        &self,
+        task_id: &str,
+        current_generation: u64,
+        approval_detail: Option<&str>,
+    ) -> Result<TaskSnapshot, ApprovalError> {
         let _lifecycle = self
             .lifecycle_lock
             .lock()
@@ -906,7 +941,7 @@ impl TaskEngine {
                 started_at_ms: None,
                 ended_at_ms,
                 exit_code: None,
-                detail,
+                detail: detail.or(approval_detail),
                 audit_error: None,
             },
         ) {
@@ -938,7 +973,7 @@ impl TaskEngine {
         task.snapshot.status = target_status;
         task.snapshot.approved_at_ms = approved_at_ms;
         task.snapshot.ended_at_ms = ended_at_ms;
-        task.snapshot.detail = detail.map(str::to_owned);
+        task.snapshot.detail = detail.or(approval_detail).map(str::to_owned);
         task.snapshot.audit_recorded = self.audit.is_some();
         if stale_generation {
             return Err(ApprovalError::StaleGeneration);
@@ -1958,6 +1993,7 @@ mod tests {
             grant_start_seq: 0,
             observe: true,
             execute: true,
+            auto_approve: false,
             created_at_ms: 0,
         }
     }
@@ -2573,6 +2609,39 @@ mod tests {
             engine.approve(&task2.task_id, 5).unwrap_err(),
             ApprovalError::NotApprovable
         );
+    }
+
+    #[test]
+    fn auto_approval_records_connection_session_trust() {
+        let engine = TaskEngine::default();
+        let record = ready_record(5);
+        let mut grant = test_grant("c1", &record);
+        grant.auto_approve = true;
+        let task = engine
+            .submit(
+                "c1",
+                &record,
+                CommandSpec {
+                    request_id: "trusted-r1",
+                    command: "id",
+                    working_directory: "login",
+                    timeout_seconds: 300,
+                },
+                &grant,
+            )
+            .unwrap();
+        assert!(engine.auto_approve_at_submit(&task.task_id));
+
+        let approved = engine
+            .auto_approve(&task.task_id, record.generation)
+            .unwrap();
+        assert_eq!(approved.status, TaskStatus::Queued);
+        assert!(approved.approved_at_ms.is_some());
+        assert_eq!(
+            approved.detail.as_deref(),
+            Some("auto-approved under connection-session trust")
+        );
+        assert!(engine.pending_approvals().unwrap().is_empty());
     }
 
     #[test]

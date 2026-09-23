@@ -68,6 +68,7 @@ pub fn run() {
             crate::mcp::commands::mcp_list_connections,
             crate::mcp::commands::mcp_grant_connection,
             crate::mcp::commands::mcp_set_grant_permissions,
+            crate::mcp::commands::mcp_set_auto_approve,
             crate::mcp::commands::mcp_revoke_connection,
             crate::mcp::commands::mcp_pending_tasks,
             crate::mcp::commands::mcp_recent_task_audit,
